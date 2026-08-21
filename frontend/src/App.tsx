@@ -1,12 +1,49 @@
-// import { useState, useEffect, useRef } from "react";
-// import { Events, WML } from "@wailsio/runtime";
-// import { GreetService } from "../bindings/changeme";
-
-// // Show the actual Wails version this project was generated against.
-// const wailsVersion = "v3.0.0-beta.3";
+import { EmptyWorkspace } from "@/components/empty-workspace";
+import { NoticeBar } from "@/components/notice-bar";
+import { RepoPanel } from "@/components/repo-panel";
+import { RepoTabs } from "@/components/repo-tabs";
+import { useWorkspace } from "@/hooks/use-workspace";
 
 function App() {
-  return <>here we are d</>;
+  const {
+    repos,
+    activeRepo,
+    activeId,
+    loading,
+    picking,
+    notice,
+    dismissNotice,
+    addRepository,
+    removeRepository,
+    selectRepository,
+  } = useWorkspace();
+
+  return (
+    <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
+      {/* The strip is always present, even with no tabs in it, so the plus button
+          sits in the same place from the first repository onwards. */}
+      <RepoTabs
+        repos={repos}
+        activeId={activeId}
+        picking={picking}
+        onSelect={selectRepository}
+        onClose={removeRepository}
+        onAdd={addRepository}
+      />
+
+      {notice && <NoticeBar notice={notice} onDismiss={dismissNotice} />}
+
+      {/* Nothing is drawn until the saved workspace has loaded, so that a stored
+          set of tabs does not flash the empty state on the way in. */}
+      {loading ? (
+        <div className="flex-1" />
+      ) : activeRepo ? (
+        <RepoPanel key={activeRepo.id} repo={activeRepo} />
+      ) : (
+        <EmptyWorkspace onAdd={addRepository} picking={picking} />
+      )}
+    </div>
+  );
 }
 
 export default App;

@@ -1,0 +1,147 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { WorkspaceService } from "../../bindings/kombu";
+import type { Repo, Workspace } from "../../bindings/kombu";
+
+export type Notice = {
+  tone: "error" | "info";
+  message: string;
+};
+
+/**
+ * useWorkspace holds the repositories shown as tabs and mediates every call to the
+ * Go side. The backend returns the whole workspace from each mutation, so state is
+ * always replaced from one authoritative value rather than patched locally.
+ */
+export function useWorkspace() {
+  const [repos, setRepos] = useState<Repo[]>([]);
+  const [activeId, setActiveId] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [picking, setPicking] = useState(false);
+  const [notice, setNotice] = useState<Notice | null>(null);
+
+  // The folder picker is a native modal window. Guard with a ref as well as state
+  // so a double-click cannot open two of them before React re-renders.
+  const pickingRef = useRef(false);
+
+  // Responses can arrive out of order — clicking two tabs quickly, or hitting the
+  // plus button before the initial load has landed. Each request takes a token and
+  // only the newest one is allowed to write state, so a slow earlier reply cannot
+  // clobber a newer one.
+  const latest = useRef(0);
+
+  const apply = useCallback((token: number, workspace: Workspace) => {
+    if (token !== latest.current) return;
+    // A nil Go slice arrives as null.
+    setRepos(workspace.repos ?? []);
+    setActiveId(workspace.activeId);
+  }, []);
+
+  const fail = useCallback((err: unknown) => {
+    if (isCancellation(err)) return;
+    setNotice({ tone: "error", message: describe(err) });
+  }, []);
+
+  useEffect(() => {
+    const token = ++latest.current;
+    const pending = WorkspaceService.GetWorkspace();
+    pending
+      .then((workspace) => apply(token, workspace))
+      .catch(fail)
+      .finally(() => {
+        // StrictMode mounts, unmounts and remounts in dev, cancelling the first
+        // request. Clearing `loading` from that dead request would flash the
+        // empty state before the live one lands.
+        if (token === latest.current) setLoading(false);
+      });
+    return () => {
+      pending.cancel();
+    };
+  }, [apply, fail]);
+
+  // Informational notices are transient; errors stay until the user dismisses them.
+  useEffect(() => {
+    if (notice?.tone !== "info") return;
+    const timer = setTimeout(() => setNotice(null), 4000);
+    return () => clearTimeout(timer);
+  }, [notice]);
+
+  const addRepository = useCallback(async () => {
+    if (pickingRef.current) return;
+    pickingRef.current = true;
+    setPicking(true);
+    setNotice(null);
+    try {
+      const result = await WorkspaceService.AddRepository();
+      // The picker is modal and can be open for a long time, so claim the token
+      // on the way out rather than on the way in.
+      apply(++latest.current, result.workspace);
+      if (result.duplicate && result.repo) {
+        setNotice({
+          tone: "info",
+          message: `${result.repo.name} is already open — switched to that tab.`,
+        });
+      }
+    } catch (err) {
+      fail(err);
+    } finally {
+      pickingRef.current = false;
+      setPicking(false);
+    }
+  }, [apply, fail]);
+
+  const removeRepository = useCallback(
+    async (id: string) => {
+      const token = ++latest.current;
+      try {
+        apply(token, await WorkspaceService.RemoveRepository(id));
+      } catch (err) {
+        fail(err);
+      }
+    },
+    [apply, fail],
+  );
+
+  const selectRepository = useCallback(
+    async (id: string) => {
+      const token = ++latest.current;
+      // Switching tabs must feel instant, so move the selection now and let the
+      // backend confirm it.
+      setActiveId(id);
+      try {
+        apply(token, await WorkspaceService.SetActiveRepository(id));
+      } catch (err) {
+        fail(err);
+      }
+    },
+    [apply, fail],
+  );
+
+  // The backend keeps activeId pointing at a real repo; falling back to the first
+  // one means a stale id can never leave a populated workspace looking empty.
+  const activeRepo =
+    repos.find((repo) => repo.id === activeId) ?? repos[0] ?? null;
+
+  return {
+    repos,
+    activeRepo,
+    activeId,
+    loading,
+    picking,
+    notice,
+    dismissNotice: useCallback(() => setNotice(null), []),
+    addRepository,
+    removeRepository,
+    selectRepository,
+  };
+}
+
+/** Cancelling a CancellablePromise rejects it; that is not a failure to report. */
+function isCancellation(err: unknown): boolean {
+  return err instanceof Error && err.name === "CancelError";
+}
+
+function describe(err: unknown): string {
+  if (err instanceof Error && err.message) return err.message;
+  if (typeof err === "string" && err) return err;
+  return "Something went wrong.";
+}

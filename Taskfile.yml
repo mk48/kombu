@@ -39,6 +39,19 @@ tasks:
     cmds:
       - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
 
+  test:
+    summary: Runs the Go tests
+    cmds:
+      - go test ./...
+
+  check:
+    summary: Vets the backend and typechecks the frontend
+    cmds:
+      - go vet .
+      - task: common:frontend:run
+        vars:
+          SCRIPT: typecheck
+
   setup:docker:
     summary: Builds Docker image for cross-compilation (~800MB download)
     cmds:
