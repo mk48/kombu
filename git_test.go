@@ -155,6 +155,55 @@ func TestReadMergeEdges(t *testing.T) {
 	}
 }
 
+func TestReadMergeEdgesDropsHistoryInheritedFromDefaultBranch(t *testing.T) {
+	clone := newOriginFixture(t)
+	commit(t, clone, "initial")
+	mustGit(t, clone, "push", "-q", "origin", "HEAD:main")
+
+	// A merge into main, before the feature branch below ever existed.
+	mustGit(t, clone, "checkout", "-q", "-b", "earlier-feature")
+	commit(t, clone, "earlier work")
+	mustGit(t, clone, "checkout", "-q", "main")
+	mustGit(t, clone, "merge", "-q", "--no-ff", "-m", "merge earlier-feature", "earlier-feature")
+	mustGit(t, clone, "push", "-q", "origin", "main")
+
+	// Forked from main after that merge, with no merges of its own: its
+	// first-parent walk still passes through "merge earlier-feature", but
+	// that merge is not this branch's own topology.
+	mustGit(t, clone, "checkout", "-q", "-b", "later-feature")
+	commit(t, clone, "later work")
+	mustGit(t, clone, "push", "-q", "origin", "later-feature")
+
+	mustGit(t, clone, "checkout", "-q", "main")
+	mustGit(t, clone, "remote", "set-head", "origin", "-a")
+
+	branches, err := readBranches(clone)
+	if err != nil {
+		t.Fatalf("readBranches: %v", err)
+	}
+
+	edges, err := readMergeEdges(clone, branches)
+	if err != nil {
+		t.Fatalf("readMergeEdges: %v", err)
+	}
+	for _, edge := range edges {
+		if edge.Into == "later-feature" {
+			t.Errorf("later-feature inherited a merge from main's history it wasn't party to: %+v", edge)
+		}
+	}
+
+	main, _ := branchByName(branches, "main")
+	var mainEdges int
+	for _, edge := range edges {
+		if edge.Into == main.Name {
+			mainEdges++
+		}
+	}
+	if mainEdges != 1 {
+		t.Errorf("main has %d merge edges, want 1 (its own merge of earlier-feature)", mainEdges)
+	}
+}
+
 func TestReadMergeEdgesDeletedSource(t *testing.T) {
 	clone := newOriginFixture(t)
 	commit(t, clone, "initial")

@@ -124,6 +124,10 @@ func (s *WorkspaceService) SetActiveRepository(id string) (Workspace, error) {
 type BranchInfo struct {
 	Branches []Branch    `json:"branches"`
 	Merges   []MergeEdge `json:"merges"`
+	// LaneOrder is the branch names in the order the lane view should render
+	// them: the repo's saved LaneOrder reconciled against the branches just
+	// read, so it always names every branch above exactly once.
+	LaneOrder []string `json:"laneOrder"`
 }
 
 // GetBranches reads repo id's origin branches and merge topology from whatever
@@ -144,7 +148,25 @@ func (s *WorkspaceService) GetBranches(id string) (BranchInfo, error) {
 	if err != nil {
 		return BranchInfo{}, err
 	}
-	return BranchInfo{Branches: branches, Merges: merges}, nil
+	return BranchInfo{
+		Branches:  branches,
+		Merges:    merges,
+		LaneOrder: reconcileLaneOrder(repo.LaneOrder, branches),
+	}, nil
+}
+
+// SetLaneOrder saves repo id's lane order — the branch names, top to bottom,
+// the user dragged into place. Names not among the repo's current branches
+// are harmless (GetBranches's reconciliation drops them on the next read),
+// so no validation against live branches happens here.
+func (s *WorkspaceService) SetLaneOrder(id string, order []string) (Workspace, error) {
+	if s.store == nil {
+		return Workspace{}, fmt.Errorf("workspace service is not initialised")
+	}
+	if err := s.store.setLaneOrder(id, order); err != nil {
+		return Workspace{}, err
+	}
+	return s.store.snapshot(), nil
 }
 
 // dialogCancelled distinguishes "the user closed the picker" from a real failure.

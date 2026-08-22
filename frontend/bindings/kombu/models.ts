@@ -67,6 +67,13 @@ export interface Branch {
 export interface BranchInfo {
     "branches": Branch[] | null;
     "merges": MergeEdge[] | null;
+
+    /**
+     * LaneOrder is the branch names in the order the lane view should render
+     * them: the repo's saved LaneOrder reconciled against the branches just
+     * read, so it always names every branch above exactly once.
+     */
+    "laneOrder": string[] | null;
 }
 
 /**
@@ -113,6 +120,14 @@ export interface Repo {
      * drop it from the workspace.
      */
     "missing": boolean;
+
+    /**
+     * LaneOrder is the branch names, top to bottom, as the user last arranged
+     * the lane view. Absent (nil) until the user reorders for the first time.
+     * Reconciled against the repo's live branches by reconcileLaneOrder — a
+     * name here that no longer matches a branch is dropped, not an error.
+     */
+    "laneOrder"?: string[] | null;
 }
 
 /**

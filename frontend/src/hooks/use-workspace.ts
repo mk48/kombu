@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { WorkspaceService } from "../../bindings/kombu";
-import type { BranchInfo, Repo, Workspace } from "../../bindings/kombu";
+import type { Branch, BranchInfo, Repo, Workspace } from "../../bindings/kombu";
 
 export type Notice = {
   tone: "error" | "info";
@@ -19,6 +19,12 @@ export function useWorkspace() {
   const [picking, setPicking] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [branchInfo, setBranchInfo] = useState<BranchInfo | null>(null);
+  // Set optimistically the moment a lane drag is dropped, and cleared once the
+  // backend confirms the reorder (or reverted if the save fails), so dragging
+  // feels instant without abandoning "the backend's state is the truth".
+  const [pendingLaneOrder, setPendingLaneOrder] = useState<string[] | null>(
+    null,
+  );
 
   // The folder picker is a native modal window. Guard with a ref as well as state
   // so a double-click cannot open two of them before React re-renders.
@@ -64,6 +70,7 @@ export function useWorkspace() {
   const latestBranches = useRef(0);
   useEffect(() => {
     setBranchInfo(null);
+    setPendingLaneOrder(null);
     if (!activeId) return;
     const token = ++latestBranches.current;
     const pending = WorkspaceService.GetBranches(activeId);
@@ -140,6 +147,49 @@ export function useWorkspace() {
   const activeRepo =
     repos.find((repo) => repo.id === activeId) ?? repos[0] ?? null;
 
+  // The lane view's render order: an in-flight drag's order takes priority so
+  // dropping feels instant, falling back to the server-reconciled order that
+  // GetBranches always returns fully populated.
+  const lanes = useMemo(() => {
+    const branches = branchInfo?.branches ?? [];
+    const order = pendingLaneOrder ?? branchInfo?.laneOrder ?? [];
+    const byName = new Map(branches.map((branch) => [branch.name, branch]));
+    const ordered: Branch[] = [];
+    for (const name of order) {
+      const branch = byName.get(name);
+      if (branch) {
+        ordered.push(branch);
+        byName.delete(name);
+      }
+    }
+    // Defensive only: laneOrder always names every branch, so nothing should
+    // remain in byName here.
+    ordered.push(...byName.values());
+    return ordered;
+  }, [branchInfo, pendingLaneOrder]);
+
+  const reorderLanes = useCallback(
+    async (order: string[]) => {
+      if (!activeRepo) return;
+      setPendingLaneOrder(order);
+      const token = ++latest.current;
+      const branchesToken = ++latestBranches.current;
+      try {
+        apply(token, await WorkspaceService.SetLaneOrder(activeRepo.id, order));
+        const info = await WorkspaceService.GetBranches(activeRepo.id);
+        if (branchesToken === latestBranches.current) {
+          setBranchInfo(info);
+          setPendingLaneOrder(null);
+        }
+      } catch (err) {
+        // Revert to the last-confirmed order and surface the failure.
+        setPendingLaneOrder(null);
+        fail(err);
+      }
+    },
+    [activeRepo, apply, fail],
+  );
+
   return {
     repos,
     activeRepo,
@@ -148,10 +198,13 @@ export function useWorkspace() {
     picking,
     notice,
     branchInfo,
+    lanes,
+    merges: branchInfo?.merges ?? [],
     dismissNotice: useCallback(() => setNotice(null), []),
     addRepository,
     removeRepository,
     selectRepository,
+    reorderLanes,
   };
 }
 

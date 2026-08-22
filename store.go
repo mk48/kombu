@@ -34,6 +34,11 @@ type Repo struct {
 	// unplugged drive or an unmounted share should grey a repo out, not silently
 	// drop it from the workspace.
 	Missing bool `json:"missing"`
+	// LaneOrder is the branch names, top to bottom, as the user last arranged
+	// the lane view. Absent (nil) until the user reorders for the first time.
+	// Reconciled against the repo's live branches by reconcileLaneOrder — a
+	// name here that no longer matches a branch is dropped, not an error.
+	LaneOrder []string `json:"laneOrder,omitempty"`
 }
 
 // Workspace is the whole persisted state: the repositories the user has added,
@@ -204,6 +209,24 @@ func (s *store) setActive(id string) error {
 				return nil
 			}
 			s.data.ActiveID = id
+			return s.persistLocked()
+		}
+	}
+	return fmt.Errorf("no repository with id %q", id)
+}
+
+// setLaneOrder saves repo id's lane order as the user last arranged it.
+// Names that don't match a live branch are harmless — reconcileLaneOrder
+// drops them silently on the next read — so no validation against git
+// happens here; store.go has no git knowledge and that boundary should stay
+// intact.
+func (s *store) setLaneOrder(id string, order []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.data.Repos {
+		if s.data.Repos[i].ID == id {
+			s.data.Repos[i].LaneOrder = order
 			return s.persistLocked()
 		}
 	}

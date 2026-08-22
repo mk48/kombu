@@ -143,13 +143,28 @@ func originDefaultBranch(repoPath string) (name string, ok bool) {
 // merge commits, matching the domain note: "its first parent is the branch
 // that received the merge, the others are what was merged in." branches
 // supplies the tip->name map used to resolve a merge edge's source branch.
+//
+// A branch's first-parent chain runs all the way back to the repository's
+// root, so a branch forked from the default branch inherits every merge in
+// the default branch's history too — walked from the feature branch's tip,
+// those commits look identical to a merge "into" the feature branch, even
+// though the feature branch didn't exist yet when they happened. Those are
+// filtered out by filterInheritedMerges before returning: only the default
+// branch keeps its full history, and every other branch keeps only merge
+// commits that are not already part of it. This does not resolve the same
+// duplication between two branches that both fork from a shared non-default
+// ancestor — a known limitation, not a full ownership computation.
 func readMergeEdges(repoPath string, branches []Branch) ([]MergeEdge, error) {
 	tipNames := make(map[string]string, len(branches))
+	var defaultBranch string
 	for _, b := range branches {
 		tipNames[b.Head] = b.Name
+		if b.IsDefault {
+			defaultBranch = b.Name
+		}
 	}
 
-	var edges []MergeEdge
+	perBranch := make(map[string][]MergeEdge, len(branches))
 	for _, b := range branches {
 		out, err := runGit(repoPath, "log", "--first-parent", "--merges",
 			"--format=%H%x00%P%x00%cI", "origin/"+b.Name)
@@ -157,6 +172,7 @@ func readMergeEdges(repoPath string, branches []Branch) ([]MergeEdge, error) {
 			return nil, fmt.Errorf("walking merge history of %s: %w", b.Name, err)
 		}
 
+		var edges []MergeEdge
 		for _, line := range splitLines(out) {
 			fields := strings.Split(line, "\x00")
 			if len(fields) != 3 {
@@ -181,8 +197,33 @@ func readMergeEdges(repoPath string, branches []Branch) ([]MergeEdge, error) {
 				})
 			}
 		}
+		perBranch[b.Name] = edges
 	}
-	return edges, nil
+
+	return filterInheritedMerges(perBranch, defaultBranch), nil
+}
+
+// filterInheritedMerges drops, from every branch but defaultBranch, any
+// merge commit that defaultBranch's own history already claims — see
+// readMergeEdges for why those show up in the first place. defaultBranch's
+// own edges are returned untouched (there's no more-upstream branch to defer
+// to); if it couldn't be resolved, nothing is filtered.
+func filterInheritedMerges(perBranch map[string][]MergeEdge, defaultBranch string) []MergeEdge {
+	trunkCommits := make(map[string]bool, len(perBranch[defaultBranch]))
+	for _, edge := range perBranch[defaultBranch] {
+		trunkCommits[edge.Commit] = true
+	}
+
+	var edges []MergeEdge
+	for branch, branchEdges := range perBranch {
+		for _, edge := range branchEdges {
+			if branch != defaultBranch && trunkCommits[edge.Commit] {
+				continue
+			}
+			edges = append(edges, edge)
+		}
+	}
+	return edges
 }
 
 // runGit runs git in dir and returns its trimmed standard output. Failures fold

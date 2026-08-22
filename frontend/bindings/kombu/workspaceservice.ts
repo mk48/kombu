@@ -54,3 +54,13 @@ export function RemoveRepository(id: string): $CancellablePromise<$models.Worksp
 export function SetActiveRepository(id: string): $CancellablePromise<$models.Workspace> {
     return $Call.ByID(240552514, id);
 }
+
+/**
+ * SetLaneOrder saves repo id's lane order — the branch names, top to bottom,
+ * the user dragged into place. Names not among the repo's current branches
+ * are harmless (GetBranches's reconciliation drops them on the next read),
+ * so no validation against live branches happens here.
+ */
+export function SetLaneOrder(id: string, order: string[] | null): $CancellablePromise<$models.Workspace> {
+    return $Call.ByID(1052165778, id, order);
+}

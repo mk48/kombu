@@ -13,10 +13,13 @@ function App() {
     picking,
     notice,
     branchInfo,
+    lanes,
+    merges,
     dismissNotice,
     addRepository,
     removeRepository,
     selectRepository,
+    reorderLanes,
   } = useWorkspace();
 
   return (
@@ -39,7 +42,14 @@ function App() {
       {loading ? (
         <div className="flex-1" />
       ) : activeRepo ? (
-        <RepoPanel key={activeRepo.id} repo={activeRepo} branchInfo={branchInfo} />
+        <RepoPanel
+          key={activeRepo.id}
+          repo={activeRepo}
+          branchInfo={branchInfo}
+          lanes={lanes}
+          merges={merges}
+          onReorderLanes={reorderLanes}
+        />
       ) : (
         <EmptyWorkspace onAdd={addRepository} picking={picking} />
       )}
