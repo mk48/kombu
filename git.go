@@ -8,23 +8,35 @@ import (
 	"time"
 )
 
-// Branch is a single local branch and its merge status, read live from the
-// repository — never persisted.
+// Branch is a single branch on the "origin" remote and its merge status, read
+// live from the repository's local refs/remotes/origin/* cache — never
+// persisted. Names have the "origin/" prefix stripped (e.g. "main", not
+// "origin/main").
 type Branch struct {
 	Name          string    `json:"name"`
 	Head          string    `json:"head"`
-	IsCurrent     bool      `json:"isCurrent"`
 	CommitterDate time.Time `json:"committerDate"`
-	// MergedToHead reports that this branch's tip is an ancestor of HEAD, i.e.
-	// it has already been merged.
-	MergedToHead bool `json:"mergedToHead"`
+	// IsCurrent reports that this is the upstream of the repository's currently
+	// checked-out local branch (by name — not a strict tracking-ref check).
+	// False, rather than a guess, when HEAD is detached or has no same-named
+	// origin branch.
+	IsCurrent bool `json:"isCurrent"`
+	// IsDefault reports that this is origin's default branch, resolved from the
+	// refs/remotes/origin/HEAD symref. That symref isn't always present (e.g. a
+	// manually added remote), in which case no branch is marked default.
+	IsDefault bool `json:"isDefault"`
+	// MergedToDefault reports that this branch's tip is an ancestor of origin's
+	// default branch, i.e. it has already been merged there. Always false when
+	// IsDefault couldn't be resolved for any branch.
+	MergedToDefault bool `json:"mergedToDefault"`
 }
 
-// MergeEdge is one merge commit found by walking a branch's first-parent chain:
-// Into received the merge. From is the branch whose tip was merged in, filled in
-// only when the merged-in commit exactly matches a currently existing local
-// branch's tip — if that branch has since been deleted, From is "" rather than a
-// guess (see AGENTS.md: never silently guess wrong about topology).
+// MergeEdge is one merge commit found by walking an origin branch's
+// first-parent chain: Into received the merge. From is the origin branch whose
+// tip was merged in, filled in only when the merged-in commit exactly matches
+// another current origin branch's tip — if that branch has since been deleted
+// on the server, From is "" rather than a guess (see AGENTS.md: never silently
+// guess wrong about topology).
 type MergeEdge struct {
 	Into   string    `json:"into"`
 	From   string    `json:"from"`
@@ -32,59 +44,105 @@ type MergeEdge struct {
 	When   time.Time `json:"when"`
 }
 
-// readBranches lists repoPath's local branches with their merge status relative
-// to HEAD. An unborn HEAD (freshly `git init`ed, no commits yet) is not an
-// error — it just yields no branches.
+// readBranches lists repoPath's branches on the "origin" remote — the server
+// side, not the local checkout — with their merge status relative to origin's
+// default branch. No commits pushed to origin yet, or no "origin" remote at
+// all, is not an error — it just yields no branches. This reads whatever
+// refs/remotes/origin/* already holds; it does not fetch.
 func readBranches(repoPath string) ([]Branch, error) {
 	out, err := runGit(repoPath, "for-each-ref",
-		"--format=%(HEAD)%00%(refname:short)%00%(objectname)%00%(committerdate:iso-strict)",
-		"refs/heads")
+		"--format=%(refname:short)%00%(objectname)%00%(committerdate:iso-strict)",
+		"refs/remotes/origin")
 	if err != nil {
-		return nil, fmt.Errorf("listing branches: %w", err)
+		return nil, fmt.Errorf("listing origin branches: %w", err)
 	}
 
 	var branches []Branch
 	for _, line := range splitLines(out) {
 		fields := strings.Split(line, "\x00")
-		if len(fields) != 4 {
-			return nil, fmt.Errorf("listing branches: unexpected for-each-ref output %q", line)
+		if len(fields) != 3 {
+			return nil, fmt.Errorf("listing origin branches: unexpected for-each-ref output %q", line)
 		}
-		when, err := time.Parse(time.RFC3339, fields[3])
+		// refs/remotes/origin/HEAD's short form is "origin" (no slash) — it is
+		// an alias for origin's default branch, not a branch of its own.
+		name, ok := strings.CutPrefix(fields[0], "origin/")
+		if !ok {
+			continue
+		}
+		when, err := time.Parse(time.RFC3339, fields[2])
 		if err != nil {
-			return nil, fmt.Errorf("listing branches: parsing committer date %q: %w", fields[3], err)
+			return nil, fmt.Errorf("listing origin branches: parsing committer date %q: %w", fields[2], err)
 		}
 		branches = append(branches, Branch{
-			Name:          fields[1],
-			Head:          fields[2],
-			IsCurrent:     fields[0] == "*",
+			Name:          name,
+			Head:          fields[1],
 			CommitterDate: when,
 		})
 	}
 	if len(branches) == 0 {
-		// `git branch --merged` resolves HEAD, which fails on an unborn HEAD
-		// (no commits yet) — there is nothing to merge-check anyway.
 		return nil, nil
 	}
 
-	merged, err := runGit(repoPath, "branch", "--merged")
-	if err != nil {
-		return nil, fmt.Errorf("listing merged branches: %w", err)
-	}
-	mergedNames := make(map[string]bool)
-	for _, line := range splitLines(merged) {
-		mergedNames[strings.TrimLeft(line, "* +")] = true
+	current, haveCurrent := currentBranchName(repoPath)
+	defaultBranch, haveDefault := originDefaultBranch(repoPath)
+
+	var mergedNames map[string]bool
+	if haveDefault {
+		merged, err := runGit(repoPath, "branch", "--remotes", "--merged", "origin/"+defaultBranch)
+		if err != nil {
+			return nil, fmt.Errorf("listing branches merged into origin/%s: %w", defaultBranch, err)
+		}
+		mergedNames = make(map[string]bool)
+		for _, line := range splitLines(merged) {
+			line = strings.TrimSpace(line)
+			// `branch --remotes` includes a synthetic "origin/HEAD -> origin/main"
+			// line alongside real branches; it is not a branch to record.
+			if line == "" || strings.Contains(line, "->") {
+				continue
+			}
+			if name, ok := strings.CutPrefix(line, "origin/"); ok {
+				mergedNames[name] = true
+			}
+		}
 	}
 
 	for i := range branches {
-		branches[i].MergedToHead = mergedNames[branches[i].Name]
+		branches[i].IsCurrent = haveCurrent && branches[i].Name == current
+		branches[i].IsDefault = haveDefault && branches[i].Name == defaultBranch
+		branches[i].MergedToDefault = mergedNames[branches[i].Name]
 	}
 	return branches, nil
 }
 
-// readMergeEdges walks each branch's first-parent chain looking for merge
-// commits, matching the domain note: "its first parent is the branch that
-// received the merge, the others are what was merged in." branches supplies the
-// tip->name map used to resolve a merge edge's source branch.
+// currentBranchName is the name of the local checkout's current branch, used
+// only to highlight the matching origin branch, if any. ok is false for a
+// detached HEAD or an unborn one — neither is an error, just nothing to mark.
+func currentBranchName(repoPath string) (name string, ok bool) {
+	out, err := runGit(repoPath, "symbolic-ref", "--short", "-q", "HEAD")
+	if err != nil {
+		return "", false
+	}
+	return out, true
+}
+
+// originDefaultBranch resolves origin's default branch (e.g. "main") from the
+// refs/remotes/origin/HEAD symref, which a normal clone sets from the remote's
+// own default at clone time. It is not always present — a remote added by hand,
+// or one whose default changed since — so a resolution failure is not an error,
+// just an unresolved default that leaves IsDefault and MergedToDefault unset.
+func originDefaultBranch(repoPath string) (name string, ok bool) {
+	out, err := runGit(repoPath, "symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD")
+	if err != nil {
+		return "", false
+	}
+	name, ok = strings.CutPrefix(out, "origin/")
+	return name, ok
+}
+
+// readMergeEdges walks each origin branch's first-parent chain looking for
+// merge commits, matching the domain note: "its first parent is the branch
+// that received the merge, the others are what was merged in." branches
+// supplies the tip->name map used to resolve a merge edge's source branch.
 func readMergeEdges(repoPath string, branches []Branch) ([]MergeEdge, error) {
 	tipNames := make(map[string]string, len(branches))
 	for _, b := range branches {
@@ -94,7 +152,7 @@ func readMergeEdges(repoPath string, branches []Branch) ([]MergeEdge, error) {
 	var edges []MergeEdge
 	for _, b := range branches {
 		out, err := runGit(repoPath, "log", "--first-parent", "--merges",
-			"--format=%H%x00%P%x00%cI", b.Name)
+			"--format=%H%x00%P%x00%cI", "origin/"+b.Name)
 		if err != nil {
 			return nil, fmt.Errorf("walking merge history of %s: %w", b.Name, err)
 		}

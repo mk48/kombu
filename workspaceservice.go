@@ -119,15 +119,15 @@ func (s *WorkspaceService) SetActiveRepository(id string) (Workspace, error) {
 	return s.store.snapshot(), nil
 }
 
-// BranchInfo is a repository's local branches and the merge edges between them,
-// read live — never persisted.
+// BranchInfo is a repository's origin branches and the merge edges between
+// them, read live from refs/remotes/origin/* — never persisted, never fetched.
 type BranchInfo struct {
 	Branches []Branch    `json:"branches"`
 	Merges   []MergeEdge `json:"merges"`
 }
 
-// GetBranches reads the local branches and merge topology of repo id, live from
-// disk.
+// GetBranches reads repo id's origin branches and merge topology from whatever
+// refs/remotes/origin/* already holds locally.
 func (s *WorkspaceService) GetBranches(id string) (BranchInfo, error) {
 	if s.store == nil {
 		return BranchInfo{}, fmt.Errorf("workspace service is not initialised")

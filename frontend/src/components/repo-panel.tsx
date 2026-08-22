@@ -61,8 +61,9 @@ export function RepoPanel({
               className="size-8 text-muted-foreground/40"
               aria-hidden="true"
             />
-            <p className="text-sm text-muted-foreground">
-              This repository has no branches yet.
+            <p className="max-w-xs text-sm text-muted-foreground">
+              No branches found on origin. Make sure this repository has an
+              "origin" remote and has been fetched.
             </p>
           </div>
         </div>
@@ -82,19 +83,24 @@ export function RepoPanel({
                   />
                   <span
                     className={
-                      branch.mergedToHead
+                      branch.mergedToDefault
                         ? "text-muted-foreground"
                         : "text-foreground"
                     }
                   >
                     {branch.name}
                   </span>
+                  {branch.isDefault && (
+                    <span className="rounded-full bg-foreground/10 px-2 py-0.5 text-xs text-foreground">
+                      default
+                    </span>
+                  )}
                   {branch.isCurrent && (
                     <span className="rounded-full bg-foreground/10 px-2 py-0.5 text-xs text-foreground">
                       current
                     </span>
                   )}
-                  {branch.mergedToHead && (
+                  {branch.mergedToDefault && (
                     <span className="text-xs text-muted-foreground">
                       merged
                     </span>

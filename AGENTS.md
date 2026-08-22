@@ -45,9 +45,10 @@ Implemented:
 - Multiple repositories open at once, one tab each, with close buttons and keyboard navigation.
 - Persistence to a JSON file, so the same tabs and selection come back on the next launch.
 
-Implemented since: reading a repository's local branches (`git.go`'s `readBranches`) and
-merge-into-where edges via first-parent walks (`readMergeEdges`), surfaced through
-`WorkspaceService.GetBranches` and shown as plain lists in `RepoPanel` — not a lane view.
+Implemented since: reading a repository's origin branches (`git.go`'s `readBranches`, from
+`refs/remotes/origin/*` — not local branches, see "Decisions made") and merge-into-where edges
+via first-parent walks (`readMergeEdges`), surfaced through `WorkspaceService.GetBranches` and
+shown as plain lists in `RepoPanel` — not a lane view.
 
 Not implemented — fork-parent inference ("cut from which branch"), squash/rebase-merge
 detection, and the lane renderer itself. Everything this document says about lanes and the fork
@@ -194,9 +195,8 @@ itself, without shelling out — `git.go` is the only place that does, see "Deci
 
 These are the hard parts of the problem, recorded so they don't get rediscovered:
 
-- **Branch tips** are cheap: enumerate `refs/heads/*` (and `refs/remotes/*` if remote branches
-  are shown). Decide explicitly whether remote-tracking branches get their own lanes or are
-  folded into their local counterpart — showing both doubles the lane count.
+- **Branch tips** are cheap: enumerate `refs/remotes/origin/*` (see "Decisions made" — kombu
+  shows origin's branches, not local ones, so this is settled: no local/remote fold to design).
 - **"Merged into where"** is derivable and reliable: a merge commit has ≥2 parents; its first
   parent is the branch that received the merge, the others are what was merged in. Walking
   first-parent chains from each tip gives merges *into* that branch. `git branch --merged <ref>`
@@ -225,6 +225,13 @@ These are the hard parts of the problem, recorded so they don't get rediscovered
   reached from the tab strip's plus button. Repositories persist as tabs, so the picker is only
   ever used to add a new one.
 - **Persistence:** one JSON file, as described above. No SQLite.
+- **Branch source:** origin's branches (`refs/remotes/origin/*`), not local ones. The server
+  side is the shared, canonical view of the branching model that a DevOps engineer wants to see —
+  a local-only unpushed branch isn't part of that picture. `readBranches` reads whatever
+  `refs/remotes/origin/*` already holds; kombu never runs `git fetch` itself, so the view is only
+  as fresh as the user's last manual fetch (a "Refresh" action to make that fetch explicit is on
+  the punch list below, still undone). No "origin" remote, or nothing fetched yet, yields an
+  empty branch list rather than an error.
 - **Git access:** shell out to the `git` binary (`git.go`), using machine-readable
   `--format`/NUL-separated output rather than parsing porcelain text, over `go-git`. The domain
   notes below assume CLI-only primitives (`merge-base --fork-point`, `git cherry --cherry-mark`)
@@ -248,7 +255,8 @@ Not yet settled. Pick deliberately and record the choice here.
 
 - **Rendering:** SVG (crisp, easy hit-testing, DOM cost at scale) vs. canvas (fast, manual
   hit-testing). Lane virtualization may make SVG viable.
-- Whether remote branches, tags, and worktrees appear in the view at all.
+- Whether tags and worktrees appear in the view at all (remote branches: settled, see "Decisions
+  made" — they're the only branches shown).
 
 ## Where to pick up
 

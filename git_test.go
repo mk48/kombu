@@ -1,20 +1,30 @@
 package main
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
-// initRepo creates a fresh repository at dir with a deterministic branch name
-// and local commit identity, so tests don't depend on the machine's git config.
-func initRepo(t *testing.T, dir string) {
+// newOriginFixture creates a bare "server" repository and a clone of it. Tests
+// exercise readBranches/readMergeEdges against the clone's directory, matching
+// how kombu reads a real checkout's refs/remotes/origin/* cache.
+func newOriginFixture(t *testing.T) string {
 	t.Helper()
-	mustGit(t, dir, "init", "-b", "main")
-	mustGit(t, dir, "config", "user.email", "test@example.com")
-	mustGit(t, dir, "config", "user.name", "Test")
+	dir := t.TempDir()
+	bare := filepath.Join(dir, "origin.git")
+	clone := filepath.Join(dir, "clone")
+
+	mustGit(t, dir, "init", "--bare", "-q", "-b", "main", bare)
+	mustGit(t, dir, "clone", "-q", bare, clone)
+	mustGit(t, clone, "config", "user.email", "test@example.com")
+	mustGit(t, clone, "config", "user.name", "Test")
+	return clone
 }
 
 // commit makes an empty commit so fixtures don't need real file content.
 func commit(t *testing.T, dir, message string) string {
 	t.Helper()
-	mustGit(t, dir, "commit", "--allow-empty", "-m", message)
+	mustGit(t, dir, "commit", "--allow-empty", "-q", "-m", message)
 	return mustGit(t, dir, "rev-parse", "HEAD")
 }
 
@@ -37,20 +47,26 @@ func branchByName(branches []Branch, name string) (Branch, bool) {
 }
 
 func TestReadBranches(t *testing.T) {
-	dir := t.TempDir()
-	initRepo(t, dir)
-	commit(t, dir, "initial")
+	clone := newOriginFixture(t)
+	commit(t, clone, "initial")
+	mustGit(t, clone, "push", "-q", "origin", "HEAD:main")
 
-	mustGit(t, dir, "checkout", "-b", "merged-feature")
-	commit(t, dir, "feature work")
-	mustGit(t, dir, "checkout", "main")
-	mustGit(t, dir, "merge", "--no-ff", "-m", "merge feature", "merged-feature")
+	mustGit(t, clone, "checkout", "-q", "-b", "merged-feature")
+	commit(t, clone, "feature work")
+	mustGit(t, clone, "push", "-q", "origin", "merged-feature")
 
-	mustGit(t, dir, "checkout", "-b", "open-feature")
-	commit(t, dir, "open work")
-	mustGit(t, dir, "checkout", "main")
+	mustGit(t, clone, "checkout", "-q", "main")
+	mustGit(t, clone, "merge", "-q", "--no-ff", "-m", "merge feature", "merged-feature")
+	mustGit(t, clone, "push", "-q", "origin", "main")
 
-	branches, err := readBranches(dir)
+	mustGit(t, clone, "checkout", "-q", "-b", "open-feature")
+	commit(t, clone, "open work")
+	mustGit(t, clone, "push", "-q", "origin", "open-feature")
+
+	mustGit(t, clone, "checkout", "-q", "main")
+	mustGit(t, clone, "remote", "set-head", "origin", "-a")
+
+	branches, err := readBranches(clone)
 	if err != nil {
 		t.Fatalf("readBranches: %v", err)
 	}
@@ -62,24 +78,33 @@ func TestReadBranches(t *testing.T) {
 	if !main.IsCurrent {
 		t.Errorf("main.IsCurrent = false, want true")
 	}
+	if !main.IsDefault {
+		t.Errorf("main.IsDefault = false, want true")
+	}
 
 	merged, _ := branchByName(branches, "merged-feature")
 	if merged.IsCurrent {
 		t.Errorf("merged-feature.IsCurrent = true, want false")
 	}
-	if !merged.MergedToHead {
-		t.Errorf("merged-feature.MergedToHead = false, want true")
+	if !merged.MergedToDefault {
+		t.Errorf("merged-feature.MergedToDefault = false, want true")
 	}
 
 	open, _ := branchByName(branches, "open-feature")
-	if open.MergedToHead {
-		t.Errorf("open-feature.MergedToHead = true, want false")
+	if open.MergedToDefault {
+		t.Errorf("open-feature.MergedToDefault = true, want false")
+	}
+	if open.IsDefault {
+		t.Errorf("open-feature.IsDefault = true, want false")
 	}
 }
 
-func TestReadBranchesUnbornHead(t *testing.T) {
+func TestReadBranchesNoOrigin(t *testing.T) {
 	dir := t.TempDir()
-	initRepo(t, dir)
+	mustGit(t, dir, "init", "-q", "-b", "main", dir)
+	mustGit(t, dir, "config", "user.email", "test@example.com")
+	mustGit(t, dir, "config", "user.name", "Test")
+	commit(t, dir, "initial")
 
 	branches, err := readBranches(dir)
 	if err != nil {
@@ -99,22 +124,25 @@ func TestReadBranchesUnbornHead(t *testing.T) {
 }
 
 func TestReadMergeEdges(t *testing.T) {
-	dir := t.TempDir()
-	initRepo(t, dir)
-	commit(t, dir, "initial")
+	clone := newOriginFixture(t)
+	commit(t, clone, "initial")
+	mustGit(t, clone, "push", "-q", "origin", "HEAD:main")
 
-	mustGit(t, dir, "checkout", "-b", "feature")
-	commit(t, dir, "feature work")
-	mustGit(t, dir, "checkout", "main")
-	mustGit(t, dir, "merge", "--no-ff", "-m", "merge feature", "feature")
-	mergeSHA := mustGit(t, dir, "rev-parse", "HEAD")
+	mustGit(t, clone, "checkout", "-q", "-b", "feature")
+	commit(t, clone, "feature work")
+	mustGit(t, clone, "push", "-q", "origin", "feature")
 
-	branches, err := readBranches(dir)
+	mustGit(t, clone, "checkout", "-q", "main")
+	mustGit(t, clone, "merge", "-q", "--no-ff", "-m", "merge feature", "feature")
+	mustGit(t, clone, "push", "-q", "origin", "main")
+	mergeSHA := mustGit(t, clone, "rev-parse", "HEAD")
+
+	branches, err := readBranches(clone)
 	if err != nil {
 		t.Fatalf("readBranches: %v", err)
 	}
 
-	edges, err := readMergeEdges(dir, branches)
+	edges, err := readMergeEdges(clone, branches)
 	if err != nil {
 		t.Fatalf("readMergeEdges: %v", err)
 	}
@@ -128,23 +156,30 @@ func TestReadMergeEdges(t *testing.T) {
 }
 
 func TestReadMergeEdgesDeletedSource(t *testing.T) {
-	dir := t.TempDir()
-	initRepo(t, dir)
-	commit(t, dir, "initial")
+	clone := newOriginFixture(t)
+	commit(t, clone, "initial")
+	mustGit(t, clone, "push", "-q", "origin", "HEAD:main")
 
-	mustGit(t, dir, "checkout", "-b", "feature")
-	commit(t, dir, "feature work")
-	mustGit(t, dir, "checkout", "main")
-	mustGit(t, dir, "merge", "--no-ff", "-m", "merge feature", "feature")
-	mergeSHA := mustGit(t, dir, "rev-parse", "HEAD")
-	mustGit(t, dir, "branch", "-D", "feature")
+	mustGit(t, clone, "checkout", "-q", "-b", "feature")
+	commit(t, clone, "feature work")
+	mustGit(t, clone, "push", "-q", "origin", "feature")
 
-	branches, err := readBranches(dir)
+	mustGit(t, clone, "checkout", "-q", "main")
+	mustGit(t, clone, "merge", "-q", "--no-ff", "-m", "merge feature", "feature")
+	mustGit(t, clone, "push", "-q", "origin", "main")
+	mergeSHA := mustGit(t, clone, "rev-parse", "HEAD")
+
+	// Simulate the source branch having been deleted on the server and this
+	// clone's remote-tracking cache already pruned, without needing a real
+	// second remote round-trip.
+	mustGit(t, clone, "update-ref", "-d", "refs/remotes/origin/feature")
+
+	branches, err := readBranches(clone)
 	if err != nil {
 		t.Fatalf("readBranches: %v", err)
 	}
 
-	edges, err := readMergeEdges(dir, branches)
+	edges, err := readMergeEdges(clone, branches)
 	if err != nil {
 		t.Fatalf("readMergeEdges: %v", err)
 	}

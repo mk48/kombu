@@ -27,25 +27,42 @@ export interface AddRepositoryResult {
 }
 
 /**
- * Branch is a single local branch and its merge status, read live from the
- * repository — never persisted.
+ * Branch is a single branch on the "origin" remote and its merge status, read
+ * live from the repository's local refs/remotes/origin/* cache — never
+ * persisted. Names have the "origin/" prefix stripped (e.g. "main", not
+ * "origin/main").
  */
 export interface Branch {
     "name": string;
     "head": string;
-    "isCurrent": boolean;
     "committerDate": string;
 
     /**
-     * MergedToHead reports that this branch's tip is an ancestor of HEAD, i.e.
-     * it has already been merged.
+     * IsCurrent reports that this is the upstream of the repository's currently
+     * checked-out local branch (by name — not a strict tracking-ref check).
+     * False, rather than a guess, when HEAD is detached or has no same-named
+     * origin branch.
      */
-    "mergedToHead": boolean;
+    "isCurrent": boolean;
+
+    /**
+     * IsDefault reports that this is origin's default branch, resolved from the
+     * refs/remotes/origin/HEAD symref. That symref isn't always present (e.g. a
+     * manually added remote), in which case no branch is marked default.
+     */
+    "isDefault": boolean;
+
+    /**
+     * MergedToDefault reports that this branch's tip is an ancestor of origin's
+     * default branch, i.e. it has already been merged there. Always false when
+     * IsDefault couldn't be resolved for any branch.
+     */
+    "mergedToDefault": boolean;
 }
 
 /**
- * BranchInfo is a repository's local branches and the merge edges between them,
- * read live — never persisted.
+ * BranchInfo is a repository's origin branches and the merge edges between
+ * them, read live from refs/remotes/origin/* — never persisted, never fetched.
  */
 export interface BranchInfo {
     "branches": Branch[] | null;
@@ -53,11 +70,12 @@ export interface BranchInfo {
 }
 
 /**
- * MergeEdge is one merge commit found by walking a branch's first-parent chain:
- * Into received the merge. From is the branch whose tip was merged in, filled in
- * only when the merged-in commit exactly matches a currently existing local
- * branch's tip — if that branch has since been deleted, From is "" rather than a
- * guess (see AGENTS.md: never silently guess wrong about topology).
+ * MergeEdge is one merge commit found by walking an origin branch's
+ * first-parent chain: Into received the merge. From is the origin branch whose
+ * tip was merged in, filled in only when the merged-in commit exactly matches
+ * another current origin branch's tip — if that branch has since been deleted
+ * on the server, From is "" rather than a guess (see AGENTS.md: never silently
+ * guess wrong about topology).
  */
 export interface MergeEdge {
     "into": string;
