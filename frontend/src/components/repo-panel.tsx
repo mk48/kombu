@@ -1,11 +1,22 @@
 import { FolderGit2, GitBranch, TriangleAlert } from "lucide-react";
-import type { Repo } from "../../bindings/kombu";
+import type { BranchInfo, Repo } from "../../bindings/kombu";
 
 /**
- * The content shown for the selected repository. For now this is only the folder
- * it points at — the branch lane view will replace the placeholder below.
+ * The content shown for the selected repository. Branches and merge edges are
+ * shown as plain lists for now — the lane view that turns this into a tree will
+ * replace them later.
  */
-export function RepoPanel({ repo }: { repo: Repo }) {
+export function RepoPanel({
+  repo,
+  branchInfo,
+}: {
+  repo: Repo;
+  branchInfo: BranchInfo | null;
+}) {
+  // A nil Go slice arrives as null.
+  const branches = branchInfo?.branches ?? [];
+  const merges = branchInfo?.merges ?? [];
+
   return (
     <div
       role="tabpanel"
@@ -39,19 +50,93 @@ export function RepoPanel({ repo }: { repo: Repo }) {
         </div>
       )}
 
-      <div className="flex flex-1 items-center justify-center px-6 py-16">
-        <div className="flex max-w-md flex-col items-center gap-3 text-center">
-          <GitBranch
-            className="size-8 text-muted-foreground/40"
-            aria-hidden="true"
-          />
-          <p className="text-sm text-muted-foreground">
-            The branch lanes for this repository will be drawn here — one
-            horizontal track per branch, showing where each was cut from and
-            where it was merged.
-          </p>
+      {!branchInfo ? (
+        <p className="px-6 py-5 text-sm text-muted-foreground">
+          Reading branches…
+        </p>
+      ) : branches.length === 0 ? (
+        <div className="flex flex-1 items-center justify-center px-6 py-16">
+          <div className="flex max-w-md flex-col items-center gap-3 text-center">
+            <GitBranch
+              className="size-8 text-muted-foreground/40"
+              aria-hidden="true"
+            />
+            <p className="text-sm text-muted-foreground">
+              This repository has no branches yet.
+            </p>
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-auto px-6 py-5">
+          <section>
+            <h2 className="text-sm font-medium text-foreground">Branches</h2>
+            <ul className="mt-2 divide-y divide-border">
+              {branches.map((branch) => (
+                <li
+                  key={branch.name}
+                  className="flex items-center gap-2 py-2 text-sm"
+                >
+                  <GitBranch
+                    className="size-4 shrink-0 text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                  <span
+                    className={
+                      branch.mergedToHead
+                        ? "text-muted-foreground"
+                        : "text-foreground"
+                    }
+                  >
+                    {branch.name}
+                  </span>
+                  {branch.isCurrent && (
+                    <span className="rounded-full bg-foreground/10 px-2 py-0.5 text-xs text-foreground">
+                      current
+                    </span>
+                  )}
+                  {branch.mergedToHead && (
+                    <span className="text-xs text-muted-foreground">
+                      merged
+                    </span>
+                  )}
+                  <span className="ml-auto font-mono text-xs text-muted-foreground">
+                    {branch.head.slice(0, 7)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          <section>
+            <h2 className="text-sm font-medium text-foreground">Merges</h2>
+            {merges.length === 0 ? (
+              <p className="mt-2 text-sm text-muted-foreground">
+                No merge commits found yet.
+              </p>
+            ) : (
+              <ul className="mt-2 divide-y divide-border">
+                {merges.map((edge) => (
+                  <li
+                    key={edge.commit}
+                    className="flex items-center gap-2 py-2 text-sm"
+                  >
+                    <span className="text-foreground">
+                      {edge.from || "unknown"}
+                    </span>
+                    <span className="text-muted-foreground" aria-hidden="true">
+                      →
+                    </span>
+                    <span className="text-foreground">{edge.into}</span>
+                    <span className="ml-auto font-mono text-xs text-muted-foreground">
+                      {edge.commit.slice(0, 7)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </div>
+      )}
     </div>
   );
 }

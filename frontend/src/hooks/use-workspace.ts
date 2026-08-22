@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { WorkspaceService } from "../../bindings/kombu";
-import type { Repo, Workspace } from "../../bindings/kombu";
+import type { BranchInfo, Repo, Workspace } from "../../bindings/kombu";
 
 export type Notice = {
   tone: "error" | "info";
@@ -18,6 +18,7 @@ export function useWorkspace() {
   const [loading, setLoading] = useState(true);
   const [picking, setPicking] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [branchInfo, setBranchInfo] = useState<BranchInfo | null>(null);
 
   // The folder picker is a native modal window. Guard with a ref as well as state
   // so a double-click cannot open two of them before React re-renders.
@@ -57,6 +58,24 @@ export function useWorkspace() {
       pending.cancel();
     };
   }, [apply, fail]);
+
+  // Branches and merge edges are live Git state, re-read whenever the selected
+  // tab changes, rather than part of the persisted Workspace.
+  const latestBranches = useRef(0);
+  useEffect(() => {
+    setBranchInfo(null);
+    if (!activeId) return;
+    const token = ++latestBranches.current;
+    const pending = WorkspaceService.GetBranches(activeId);
+    pending
+      .then((info) => {
+        if (token === latestBranches.current) setBranchInfo(info);
+      })
+      .catch(fail);
+    return () => {
+      pending.cancel();
+    };
+  }, [activeId, fail]);
 
   // Informational notices are transient; errors stay until the user dismisses them.
   useEffect(() => {
@@ -128,6 +147,7 @@ export function useWorkspace() {
     loading,
     picking,
     notice,
+    branchInfo,
     dismissNotice: useCallback(() => setNotice(null), []),
     addRepository,
     removeRepository,

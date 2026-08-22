@@ -24,6 +24,14 @@ export function AddRepository(): $CancellablePromise<$models.AddRepositoryResult
 }
 
 /**
+ * GetBranches reads the local branches and merge topology of repo id, live from
+ * disk.
+ */
+export function GetBranches(id: string): $CancellablePromise<$models.BranchInfo> {
+    return $Call.ByID(1836375704, id);
+}
+
+/**
  * GetWorkspace returns the current repositories and selection. Called once when
  * the UI mounts.
  */

@@ -12,6 +12,7 @@ function App() {
     loading,
     picking,
     notice,
+    branchInfo,
     dismissNotice,
     addRepository,
     removeRepository,
@@ -38,7 +39,7 @@ function App() {
       {loading ? (
         <div className="flex-1" />
       ) : activeRepo ? (
-        <RepoPanel key={activeRepo.id} repo={activeRepo} />
+        <RepoPanel key={activeRepo.id} repo={activeRepo} branchInfo={branchInfo} />
       ) : (
         <EmptyWorkspace onAdd={addRepository} picking={picking} />
       )}

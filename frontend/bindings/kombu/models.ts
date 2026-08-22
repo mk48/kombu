@@ -27,6 +27,46 @@ export interface AddRepositoryResult {
 }
 
 /**
+ * Branch is a single local branch and its merge status, read live from the
+ * repository — never persisted.
+ */
+export interface Branch {
+    "name": string;
+    "head": string;
+    "isCurrent": boolean;
+    "committerDate": string;
+
+    /**
+     * MergedToHead reports that this branch's tip is an ancestor of HEAD, i.e.
+     * it has already been merged.
+     */
+    "mergedToHead": boolean;
+}
+
+/**
+ * BranchInfo is a repository's local branches and the merge edges between them,
+ * read live — never persisted.
+ */
+export interface BranchInfo {
+    "branches": Branch[] | null;
+    "merges": MergeEdge[] | null;
+}
+
+/**
+ * MergeEdge is one merge commit found by walking a branch's first-parent chain:
+ * Into received the merge. From is the branch whose tip was merged in, filled in
+ * only when the merged-in commit exactly matches a currently existing local
+ * branch's tip — if that branch has since been deleted, From is "" rather than a
+ * guess (see AGENTS.md: never silently guess wrong about topology).
+ */
+export interface MergeEdge {
+    "into": string;
+    "from": string;
+    "commit": string;
+    "when": string;
+}
+
+/**
  * Repo is a single Git repository the user has added to the workspace.
  */
 export interface Repo {

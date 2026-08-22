@@ -181,6 +181,19 @@ func (s *store) remove(id string) error {
 	return s.persistLocked()
 }
 
+// repo looks up a single repository by id.
+func (s *store) repo(id string) (Repo, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.data.Repos {
+		if s.data.Repos[i].ID == id {
+			return s.data.Repos[i], nil
+		}
+	}
+	return Repo{}, fmt.Errorf("no repository with id %q", id)
+}
+
 func (s *store) setActive(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

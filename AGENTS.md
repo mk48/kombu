@@ -45,10 +45,14 @@ Implemented:
 - Multiple repositories open at once, one tab each, with close buttons and keyboard navigation.
 - Persistence to a JSON file, so the same tabs and selection come back on the next launch.
 
-Not implemented — **no Git reading of any kind yet.** A repository's tab shows its folder name
-and path and nothing more. Everything this document says about lanes, forks, and merge edges is
-*intent*: the model, the Git access layer, and the renderer are all still to be written. Do not
-assume a file exists because this document mentions it.
+Implemented since: reading a repository's local branches (`git.go`'s `readBranches`) and
+merge-into-where edges via first-parent walks (`readMergeEdges`), surfaced through
+`WorkspaceService.GetBranches` and shown as plain lists in `RepoPanel` — not a lane view.
+
+Not implemented — fork-parent inference ("cut from which branch"), squash/rebase-merge
+detection, and the lane renderer itself. Everything this document says about lanes and the fork
+edges specifically is still *intent*: do not assume a file exists because this document mentions
+it.
 
 Template leftovers still to deal with (cosmetic, so do not churn them in unrelated PRs):
 
@@ -183,8 +187,8 @@ The workspace lives in a single JSON file, deliberately not a database:
 
 Repository discovery (`repoRoot`) walks **up** from the chosen folder, matching how the git CLI
 behaves: picking `myrepo/src/lib` adds `myrepo`. It accepts a `.git` directory, a `.git` *file*
-(worktrees and submodules), and bare repositories (`HEAD` + `objects/` + `refs/`). It does not
-shell out to `git` — nothing in the codebase does yet, which is one of the open decisions below.
+(worktrees and submodules), and bare repositories (`HEAD` + `objects/` + `refs/`). It does this
+itself, without shelling out — `git.go` is the only place that does, see "Decisions made" below.
 
 ## Domain notes for whoever implements the Git reading
 
@@ -221,6 +225,12 @@ These are the hard parts of the problem, recorded so they don't get rediscovered
   reached from the tab strip's plus button. Repositories persist as tabs, so the picker is only
   ever used to add a new one.
 - **Persistence:** one JSON file, as described above. No SQLite.
+- **Git access:** shell out to the `git` binary (`git.go`), using machine-readable
+  `--format`/NUL-separated output rather than parsing porcelain text, over `go-git`. The domain
+  notes below assume CLI-only primitives (`merge-base --fork-point`, `git cherry --cherry-mark`)
+  that `go-git` doesn't provide, so shelling out avoids redoing this when fork-parent inference
+  and squash-merge detection are built. Requires `git` on PATH, which a Git-visualization app can
+  reasonably expect.
 - **Theme:** light. Nothing sets a class on `<html>`, so the `:root` token set in `index.css`
   applies and the native window background matches it (`NewRGB(255, 255, 255)`). The `.dark`
   block and the `dark:` variants in `button.tsx` are dormant but intact — a toggle later is only
@@ -236,9 +246,6 @@ These are the hard parts of the problem, recorded so they don't get rediscovered
 
 Not yet settled. Pick deliberately and record the choice here.
 
-- **Git access:** shell out to the `git` binary (simple, exact semantics, requires git installed)
-  vs. `go-git` (self-contained, pure Go, slower and less complete on odd repos). Nothing reads
-  Git yet, so this is wide open — and it is the next thing that has to be decided.
 - **Rendering:** SVG (crisp, easy hit-testing, DOM cost at scale) vs. canvas (fast, manual
   hit-testing). Lane virtualization may make SVG viable.
 - Whether remote branches, tags, and worktrees appear in the view at all.
@@ -247,9 +254,10 @@ Not yet settled. Pick deliberately and record the choice here.
 
 The shelf is done; the product is not. In rough order:
 
-1. Decide the Git access approach, then read a repository's branch list into a Go model and
-   surface it in `RepoPanel` as a plain list. That proves the pipe end to end.
-2. Derive the topology: fork parent (a heuristic — see the domain notes) and merge edges.
+1. ~~Read a repository's branch list into a Go model and surface it in `RepoPanel` as a plain
+   list.~~ Done: `git.go`'s `readBranches`/`readMergeEdges`, `WorkspaceService.GetBranches`.
+2. Fork-parent inference (a heuristic — see the domain notes) and squash/rebase-merge detection,
+   plus backfilling a merge edge's `From` when the source branch has been deleted.
 3. Lane ordering, then the renderer, then vertical navigation over lanes.
 
 Cheap things left undone in the current UI, none of them blocking: a refresh action, tab

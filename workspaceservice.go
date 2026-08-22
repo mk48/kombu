@@ -119,6 +119,34 @@ func (s *WorkspaceService) SetActiveRepository(id string) (Workspace, error) {
 	return s.store.snapshot(), nil
 }
 
+// BranchInfo is a repository's local branches and the merge edges between them,
+// read live — never persisted.
+type BranchInfo struct {
+	Branches []Branch    `json:"branches"`
+	Merges   []MergeEdge `json:"merges"`
+}
+
+// GetBranches reads the local branches and merge topology of repo id, live from
+// disk.
+func (s *WorkspaceService) GetBranches(id string) (BranchInfo, error) {
+	if s.store == nil {
+		return BranchInfo{}, fmt.Errorf("workspace service is not initialised")
+	}
+	repo, err := s.store.repo(id)
+	if err != nil {
+		return BranchInfo{}, err
+	}
+	branches, err := readBranches(repo.Path)
+	if err != nil {
+		return BranchInfo{}, err
+	}
+	merges, err := readMergeEdges(repo.Path, branches)
+	if err != nil {
+		return BranchInfo{}, err
+	}
+	return BranchInfo{Branches: branches, Merges: merges}, nil
+}
+
 // dialogCancelled distinguishes "the user closed the picker" from a real failure.
 // The two cases are not reported consistently across platforms: Windows returns a
 // "cancelled by user" error from an internal package that cannot be compared

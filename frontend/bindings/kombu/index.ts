@@ -8,6 +8,9 @@ export {
 
 export type {
     AddRepositoryResult,
+    Branch,
+    BranchInfo,
+    MergeEdge,
     Repo,
     Workspace
 } from "./models.js";
