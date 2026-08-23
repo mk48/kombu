@@ -19,6 +19,9 @@ export const CONNECTOR_PULLBACK = 28;
 /** Length of the dashed stub drawn for a merge whose source branch no longer exists. */
 export const UNKNOWN_SOURCE_STUB_LENGTH = 36;
 
+/** Horizontal pull-back of a fork connector's parent-side point from the fork point, mirroring CONNECTOR_PULLBACK but tunable independently. */
+export const FORK_CONNECTOR_PULLBACK = 28;
+
 /** Vertical center of lane index `i`, in the plot's local coordinate space. */
 export function laneY(index: number): number {
   return index * LANE_HEIGHT + LANE_HEIGHT / 2;

@@ -124,6 +124,10 @@ func (s *WorkspaceService) SetActiveRepository(id string) (Workspace, error) {
 type BranchInfo struct {
 	Branches []Branch    `json:"branches"`
 	Merges   []MergeEdge `json:"merges"`
+	// Forks is a best-guess "cut from" edge per non-default branch — see
+	// inferForkEdges. A branch missing from this list simply has no
+	// confident candidate parent, not an error.
+	Forks []ForkEdge `json:"forks"`
 	// LaneOrder is the branch names in the order the lane view should render
 	// them: the repo's saved LaneOrder reconciled against the branches just
 	// read, so it always names every branch above exactly once.
@@ -148,9 +152,14 @@ func (s *WorkspaceService) GetBranches(id string) (BranchInfo, error) {
 	if err != nil {
 		return BranchInfo{}, err
 	}
+	forks, err := inferForkEdges(repo.Path, branches)
+	if err != nil {
+		return BranchInfo{}, err
+	}
 	return BranchInfo{
 		Branches:  branches,
 		Merges:    merges,
+		Forks:     forks,
 		LaneOrder: reconcileLaneOrder(repo.LaneOrder, branches),
 	}, nil
 }

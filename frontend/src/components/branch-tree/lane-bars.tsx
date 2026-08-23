@@ -1,23 +1,27 @@
-import type { Branch, MergeEdge } from "../../../bindings/kombu";
+import type { Branch, ForkEdge, MergeEdge } from "../../../bindings/kombu";
 import { MIN_BAR_LENGTH, laneY } from "./geometry";
 import type { TimeScale } from "./time-scale";
 
 /**
  * The lane bars themselves: one horizontal line per branch, spanning only
- * between timestamps actually known for it (its tip, and any merge it took
- * part in) — never drawn back to a fabricated start, since fork points
- * aren't inferred yet (see AGENTS.md). Deliberately no per-commit markers:
- * the tree shows branches and merges, not commits.
+ * between timestamps actually known for it (its tip, any merge it took part
+ * in, and its inferred fork point when one was found) — never drawn back to
+ * a fabricated start when none of those are available. Deliberately no
+ * per-commit markers: the tree shows branches and merges, not commits.
  */
 export function LaneBars({
   lanes,
   merges,
+  forks,
   scale,
 }: {
   lanes: Branch[];
   merges: MergeEdge[];
+  forks: ForkEdge[];
   scale: TimeScale;
 }) {
+  const forkByBranch = new Map(forks.map((fork) => [fork.branch, fork]));
+
   return (
     <>
       {lanes.map((branch, index) => {
@@ -28,6 +32,8 @@ export function LaneBars({
             touchXs.push(scale.toX(edge.when));
           }
         }
+        const fork = forkByBranch.get(branch.name);
+        if (fork) touchXs.push(scale.toX(fork.at));
 
         let startX = Math.min(...touchXs);
         const endX = Math.max(...touchXs);

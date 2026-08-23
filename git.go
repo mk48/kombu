@@ -226,6 +226,128 @@ func filterInheritedMerges(perBranch map[string][]MergeEdge, defaultBranch strin
 	return edges
 }
 
+// ForkEdge records that Branch appears to have been cut from From, at the
+// commit and time of their inferred common ancestor. This is a heuristic —
+// git records no parent-branch pointer — so a ForkEdge is only ever a best
+// guess: see inferForkEdges for how it's derived, and AGENTS.md's domain
+// notes for why this can't be a fact. Branch never repeats across edges and
+// From is never "" — when no candidate parent can be found at all, no edge
+// is produced for that branch, rather than guessing.
+type ForkEdge struct {
+	Branch string    `json:"branch"`
+	From   string    `json:"from"`
+	Commit string    `json:"commit"`
+	At     time.Time `json:"at"`
+}
+
+// inferForkEdges guesses, for every non-default branch, which other branch
+// it was most likely cut from. Git has no record of this, so the heuristic
+// is: compute merge-base(branch, candidate) for every other candidate
+// branch, and pick whichever candidate's merge-base is furthest downstream
+// (i.e. every other candidate's merge-base is an ancestor of it). Every
+// merge-base(X, *) lies somewhere on X's own ancestry chain, so these
+// candidates are themselves ancestor-ordered — the furthest-downstream one
+// reflects the least history walked back, i.e. the closest relationship. A
+// sibling branch or a grandparent can only tie or lose that comparison, never
+// win it (see the direction check below for why ties must be broken by
+// ancestry rather than by commit timestamp, which can collide). The default
+// branch is never assigned a parent: it's treated as the tree's root
+// regardless of what its own git history looks like.
+//
+// One direction check matters: if merge-base(X, Y) equals X's own tip, X is
+// (weakly) an ancestor of Y — X hasn't moved since, or Y already contains
+// all of X — so Y cannot be X's parent (if anything, the relationship runs
+// the other way, and will surface when Y is the branch being resolved).
+// Without this check, a branch's own untouched-since-creation state would
+// make its *children* look like better "parents" than its true parent,
+// since nothing can have a closer common ancestor with X than a commit that
+// already contains X entirely.
+//
+// Cost is O(n^2) git calls for n branches (merge-base memoized, since it's
+// symmetric) — fine for the small-to-medium branch counts this has been
+// tested against, but worth revisiting per AGENTS.md's scale notes if it
+// proves slow on a repository with hundreds of branches.
+func inferForkEdges(repoPath string, branches []Branch) ([]ForkEdge, error) {
+	if len(branches) < 2 {
+		return nil, nil
+	}
+
+	type pairKey struct{ a, b string }
+	baseCache := make(map[pairKey]string)
+	mergeBase := func(a, b string) (string, bool) {
+		key := pairKey{a, b}
+		if key.a > key.b {
+			key.a, key.b = key.b, key.a
+		}
+		if base, ok := baseCache[key]; ok {
+			return base, base != ""
+		}
+		out, err := runGit(repoPath, "merge-base", "origin/"+key.a, "origin/"+key.b)
+		if err != nil {
+			baseCache[key] = ""
+			return "", false
+		}
+		baseCache[key] = out
+		return out, true
+	}
+
+	var edges []ForkEdge
+	for _, b := range branches {
+		if b.IsDefault {
+			continue
+		}
+
+		var bestFrom, bestCommit string
+		found := false
+		for _, other := range branches {
+			if other.Name == b.Name {
+				continue
+			}
+			base, ok := mergeBase(b.Name, other.Name)
+			if !ok || base == b.Head {
+				continue
+			}
+			switch {
+			case !found:
+				bestFrom, bestCommit, found = other.Name, base, true
+			case base != bestCommit && commitIsAncestor(repoPath, bestCommit, base):
+				// base is strictly downstream of the current best — a
+				// closer relationship, so other supersedes it.
+				bestFrom, bestCommit = other.Name, base
+			}
+		}
+		if !found {
+			continue
+		}
+		when, ok := commitDate(repoPath, bestCommit)
+		if !ok {
+			continue
+		}
+		edges = append(edges, ForkEdge{Branch: b.Name, From: bestFrom, Commit: bestCommit, At: when})
+	}
+	return edges, nil
+}
+
+// commitIsAncestor reports whether commit a is an ancestor of (or equal to)
+// commit b. `--is-ancestor` exits 1 for "no", which is a normal result, not
+// a failure — only an unexpected error (e.g. a bad ref) collapses to false,
+// the conservative "don't treat this as more specific than it is" default.
+func commitIsAncestor(repoPath, a, b string) bool {
+	cmd := exec.Command("git", "-C", repoPath, "merge-base", "--is-ancestor", a, b)
+	return cmd.Run() == nil
+}
+
+// commitDate is the committer date of an arbitrary commit (not necessarily a
+// branch tip).
+func commitDate(repoPath, commit string) (time.Time, bool) {
+	out, err := runGit(repoPath, "show", "-s", "--format=%cI", commit)
+	if err != nil {
+		return time.Time{}, false
+	}
+	when, err := time.Parse(time.RFC3339, out)
+	return when, err == nil
+}
+
 // runGit runs git in dir and returns its trimmed standard output. Failures fold
 // standard error into the returned error so they are diagnosable — a missing
 // git binary or a repository in a bad state should be obvious from the message

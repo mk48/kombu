@@ -15,6 +15,7 @@ function App() {
     branchInfo,
     lanes,
     merges,
+    forks,
     dismissNotice,
     addRepository,
     removeRepository,
@@ -48,6 +49,7 @@ function App() {
           branchInfo={branchInfo}
           lanes={lanes}
           merges={merges}
+          forks={forks}
           onReorderLanes={reorderLanes}
         />
       ) : (

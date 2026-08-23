@@ -200,6 +200,7 @@ export function useWorkspace() {
     branchInfo,
     lanes,
     merges: branchInfo?.merges ?? [],
+    forks: branchInfo?.forks ?? [],
     dismissNotice: useCallback(() => setNotice(null), []),
     addRepository,
     removeRepository,

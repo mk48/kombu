@@ -45,12 +45,17 @@ export function MergeConnectors({
           <path d="M0,0 L8,4 L0,8 Z" className="fill-chart-2" />
         </marker>
       </defs>
-      {merges.map((edge) => {
+      {merges.map((edge, index) => {
         const intoIndex = laneIndex.get(edge.into);
         // The target branch isn't currently rendered (shouldn't normally
         // happen — every branch GetBranches returns gets a lane).
         if (intoIndex === undefined) return null;
 
+        // An octopus merge (one commit, 3+ parents) produces multiple edges
+        // sharing the same commit but different `from` — commit alone isn't
+        // a unique key, and two unresolved sources on the same commit would
+        // even share `from` (both ""), hence the index as a final tiebreak.
+        const key = `${edge.commit}-${edge.from}-${index}`;
         const mergeX = scale.toX(edge.when);
         const intoY = laneY(intoIndex);
         const fromIndex = edge.from ? laneIndex.get(edge.from) : undefined;
@@ -58,7 +63,7 @@ export function MergeConnectors({
         if (fromIndex === undefined) {
           const stubX = Math.max(0, mergeX - UNKNOWN_SOURCE_STUB_LENGTH);
           return (
-            <g key={edge.commit} className="text-muted-foreground/60">
+            <g key={key} className="text-muted-foreground/60">
               <title>{`Merged from a branch no longer on origin — ${new Date(edge.when).toLocaleString()}`}</title>
               <line
                 x1={stubX}
@@ -89,7 +94,7 @@ export function MergeConnectors({
 
         return (
           <path
-            key={edge.commit}
+            key={key}
             d={d ?? undefined}
             fill="none"
             strokeWidth={1.5}

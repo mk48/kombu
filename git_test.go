@@ -204,6 +204,112 @@ func TestReadMergeEdgesDropsHistoryInheritedFromDefaultBranch(t *testing.T) {
 	}
 }
 
+func forkEdgeFor(edges []ForkEdge, branch string) (ForkEdge, bool) {
+	for _, e := range edges {
+		if e.Branch == branch {
+			return e, true
+		}
+	}
+	return ForkEdge{}, false
+}
+
+func TestInferForkEdgesSimpleFork(t *testing.T) {
+	clone := newOriginFixture(t)
+	commit(t, clone, "initial")
+	mustGit(t, clone, "push", "-q", "origin", "HEAD:main")
+
+	mustGit(t, clone, "checkout", "-q", "-b", "dev")
+	commit(t, clone, "dev work")
+	mustGit(t, clone, "push", "-q", "origin", "dev")
+
+	mustGit(t, clone, "checkout", "-q", "main")
+	mustGit(t, clone, "remote", "set-head", "origin", "-a")
+
+	branches, err := readBranches(clone)
+	if err != nil {
+		t.Fatalf("readBranches: %v", err)
+	}
+
+	edges, err := inferForkEdges(clone, branches)
+	if err != nil {
+		t.Fatalf("inferForkEdges: %v", err)
+	}
+
+	dev, ok := forkEdgeFor(edges, "dev")
+	if !ok {
+		t.Fatal("no fork edge found for dev")
+	}
+	if dev.From != "main" {
+		t.Errorf("dev.From = %q, want %q", dev.From, "main")
+	}
+
+	if _, ok := forkEdgeFor(edges, "main"); ok {
+		t.Error("the default branch got a fork edge; it should never be assigned a parent")
+	}
+}
+
+func TestInferForkEdgesPrefersNearestParentOverGrandparent(t *testing.T) {
+	clone := newOriginFixture(t)
+	commit(t, clone, "initial")
+	mustGit(t, clone, "push", "-q", "origin", "HEAD:main")
+
+	mustGit(t, clone, "checkout", "-q", "-b", "release")
+	commit(t, clone, "release work")
+	mustGit(t, clone, "push", "-q", "origin", "release")
+
+	mustGit(t, clone, "checkout", "-q", "-b", "hotfix")
+	commit(t, clone, "hotfix work")
+	mustGit(t, clone, "push", "-q", "origin", "hotfix")
+
+	mustGit(t, clone, "checkout", "-q", "main")
+	mustGit(t, clone, "remote", "set-head", "origin", "-a")
+
+	branches, err := readBranches(clone)
+	if err != nil {
+		t.Fatalf("readBranches: %v", err)
+	}
+
+	edges, err := inferForkEdges(clone, branches)
+	if err != nil {
+		t.Fatalf("inferForkEdges: %v", err)
+	}
+
+	release, ok := forkEdgeFor(edges, "release")
+	if !ok || release.From != "main" {
+		t.Errorf("release fork edge = %+v, ok=%v, want From=main", release, ok)
+	}
+	hotfix, ok := forkEdgeFor(edges, "hotfix")
+	if !ok || hotfix.From != "release" {
+		t.Errorf("hotfix fork edge = %+v, ok=%v, want From=release (nearest parent, not the grandparent main)", hotfix, ok)
+	}
+}
+
+func TestInferForkEdgesUnrelatedHistoryYieldsNoEdge(t *testing.T) {
+	clone := newOriginFixture(t)
+	commit(t, clone, "initial")
+	mustGit(t, clone, "push", "-q", "origin", "HEAD:main")
+
+	mustGit(t, clone, "checkout", "-q", "--orphan", "unrelated")
+	mustGit(t, clone, "commit", "--allow-empty", "-q", "-m", "unrelated history")
+	mustGit(t, clone, "push", "-q", "origin", "unrelated")
+
+	mustGit(t, clone, "checkout", "-q", "main")
+	mustGit(t, clone, "remote", "set-head", "origin", "-a")
+
+	branches, err := readBranches(clone)
+	if err != nil {
+		t.Fatalf("readBranches: %v", err)
+	}
+
+	edges, err := inferForkEdges(clone, branches)
+	if err != nil {
+		t.Fatalf("inferForkEdges: %v", err)
+	}
+	if _, ok := forkEdgeFor(edges, "unrelated"); ok {
+		t.Error("a branch with no shared history got a fork edge; should have none, not a guess")
+	}
+}
+
 func TestReadMergeEdgesDeletedSource(t *testing.T) {
 	clone := newOriginFixture(t)
 	commit(t, clone, "initial")

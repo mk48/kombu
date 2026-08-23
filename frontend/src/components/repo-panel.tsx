@@ -1,5 +1,5 @@
 import { FolderGit2, GitBranch, TriangleAlert } from "lucide-react";
-import type { Branch, BranchInfo, MergeEdge, Repo } from "../../bindings/kombu";
+import type { Branch, BranchInfo, ForkEdge, MergeEdge, Repo } from "../../bindings/kombu";
 import { BranchTree } from "./branch-tree/branch-tree";
 
 /**
@@ -11,12 +11,14 @@ export function RepoPanel({
   branchInfo,
   lanes,
   merges,
+  forks,
   onReorderLanes,
 }: {
   repo: Repo;
   branchInfo: BranchInfo | null;
   lanes: Branch[];
   merges: MergeEdge[];
+  forks: ForkEdge[];
   onReorderLanes: (order: string[]) => void;
 }) {
   return (
@@ -70,7 +72,12 @@ export function RepoPanel({
           </div>
         </div>
       ) : (
-        <BranchTree lanes={lanes} merges={merges} onReorder={onReorderLanes} />
+        <BranchTree
+          lanes={lanes}
+          merges={merges}
+          forks={forks}
+          onReorder={onReorderLanes}
+        />
       )}
     </div>
   );

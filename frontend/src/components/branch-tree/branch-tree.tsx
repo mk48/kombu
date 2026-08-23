@@ -13,11 +13,12 @@ import {
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
-import type { Branch, MergeEdge } from "../../../bindings/kombu";
+import type { Branch, ForkEdge, MergeEdge } from "../../../bindings/kombu";
 import { LaneRow } from "./lane-row";
 import { TimeRuler } from "./time-ruler";
 import { LaneBars } from "./lane-bars";
 import { MergeConnectors } from "./merge-connectors";
+import { ForkConnectors } from "./fork-connectors";
 import { createTimeScale } from "./time-scale";
 import {
   LABEL_GUTTER_WIDTH,
@@ -42,10 +43,12 @@ import {
 export function BranchTree({
   lanes,
   merges,
+  forks,
   onReorder,
 }: {
   lanes: Branch[];
   merges: MergeEdge[];
+  forks: ForkEdge[];
   onReorder: (order: string[]) => void;
 }) {
   const laneIndex = useMemo(
@@ -56,8 +59,9 @@ export function BranchTree({
   const scale = useMemo(() => {
     const dates = lanes.map((branch) => new Date(branch.committerDate));
     for (const edge of merges) dates.push(new Date(edge.when));
+    for (const fork of forks) dates.push(new Date(fork.at));
     return createTimeScale(dates, PLOT_WIDTH);
-  }, [lanes, merges]);
+  }, [lanes, merges, forks]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -111,7 +115,8 @@ export function BranchTree({
 
         <div style={{ width: scale.width, height: plotHeight }}>
           <svg width={scale.width} height={plotHeight} className="block">
-            <LaneBars lanes={lanes} merges={merges} scale={scale} />
+            <LaneBars lanes={lanes} merges={merges} forks={forks} scale={scale} />
+            <ForkConnectors forks={forks} laneIndex={laneIndex} scale={scale} />
             <MergeConnectors merges={merges} laneIndex={laneIndex} scale={scale} />
           </svg>
         </div>

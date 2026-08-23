@@ -29,22 +29,24 @@ Built for DevOps and platform engineers who need to answer, on an unfamiliar rep
 
 ## Status
 
-🚧 **Early development.** The repository shelf works; the visualisation does not exist yet.
+🚧 **Early development**, but the core lane view works.
 
 **Working today**
 
 - Add a local Git repository through a native folder picker. Pick any folder inside a
   repository and its root is added, the same way the `git` CLI resolves a repository.
-- Keep several repositories open at once, one tab each — add as many as you like.
-- Tabs and the selected repository persist between launches, in a plain JSON file under your
-  user config directory.
-- A repository whose folder has gone missing is flagged rather than dropped, so an unplugged
-  drive doesn't erase your tabs.
+- Keep several repositories open at once, one tab each — add as many as you like. Tabs and the
+  selected repository persist between launches, in a plain JSON file under your user config
+  directory. A repository whose folder has gone missing is flagged rather than dropped, so an
+  unplugged drive doesn't erase your tabs.
+- The lane view: one horizontal lane per origin branch, reorderable by dragging its label (the
+  order is saved per repository), with merge connectors between lanes and a best-guess "cut from"
+  connector to the branch it was likely forked from.
 
 **Not yet**
 
-Nothing reads Git yet. A tab shows its folder name and path; the branch lanes, fork and merge
-edges, and everything else described above is still to be built.
+Squash/rebase-merge detection, recovering a merge's source branch once it's been deleted from
+origin, and a way to correct a wrong fork-parent guess by hand.
 
 ## Stack
 

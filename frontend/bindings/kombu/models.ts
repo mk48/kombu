@@ -69,11 +69,34 @@ export interface BranchInfo {
     "merges": MergeEdge[] | null;
 
     /**
+     * Forks is a best-guess "cut from" edge per non-default branch — see
+     * inferForkEdges. A branch missing from this list simply has no
+     * confident candidate parent, not an error.
+     */
+    "forks": ForkEdge[] | null;
+
+    /**
      * LaneOrder is the branch names in the order the lane view should render
      * them: the repo's saved LaneOrder reconciled against the branches just
      * read, so it always names every branch above exactly once.
      */
     "laneOrder": string[] | null;
+}
+
+/**
+ * ForkEdge records that Branch appears to have been cut from From, at the
+ * commit and time of their inferred common ancestor. This is a heuristic —
+ * git records no parent-branch pointer — so a ForkEdge is only ever a best
+ * guess: see inferForkEdges for how it's derived, and AGENTS.md's domain
+ * notes for why this can't be a fact. Branch never repeats across edges and
+ * From is never "" — when no candidate parent can be found at all, no edge
+ * is produced for that branch, rather than guessing.
+ */
+export interface ForkEdge {
+    "branch": string;
+    "from": string;
+    "commit": string;
+    "at": string;
 }
 
 /**

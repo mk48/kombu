@@ -36,24 +36,35 @@ occupy two lanes, or would turn the view into a commit graph, it is the wrong ch
 
 ## Current state
 
-**Repository shelf works; the visualisation does not exist yet.**
+**The lane view exists and covers fork edges, merge edges, and manual reordering.**
 
 Implemented:
 
 - Adding a local repository through the native folder picker, from the tab strip's plus button
-  or the empty state.
-- Multiple repositories open at once, one tab each, with close buttons and keyboard navigation.
-- Persistence to a JSON file, so the same tabs and selection come back on the next launch.
+  or the empty state; multiple repositories open at once, one tab each; persistence to a JSON
+  file, so tabs, selection, and lane order all come back on the next launch.
+- Reading a repository's origin branches (`git.go`'s `readBranches`, from `refs/remotes/origin/*`
+  — not local branches, see "Decisions made") and merge-into-where edges via first-parent walks
+  (`readMergeEdges`, with `filterInheritedMerges` dropping merges a branch only "has" because it
+  descends from the default branch's history — see that function's doc comment for why that
+  matters at scale).
+- Fork-parent inference (`inferForkEdges`): a heuristic — see the domain notes below — based on
+  pairwise `merge-base`, picking whichever candidate's merge-base is furthest downstream on the
+  branch's own ancestry chain. The default branch is never assigned a parent. A branch with no
+  confident candidate gets no edge, not a guess.
+- The lane renderer itself (`frontend/src/components/branch-tree/`): one fixed horizontal lane
+  per branch on a shared calendar-time X axis, hand-rolled SVG (see "Decisions made" — this was
+  the "Open decisions" rendering question, now settled), manually reorderable via `@dnd-kit`
+  drag handles with the order persisted per repository (`Repo.LaneOrder` in `store.go`,
+  `WorkspaceService.SetLaneOrder`). Shows branch bars, merge connectors (solid, arrowhead,
+  landing at the merge timestamp), and fork connectors (dashed, hollow arrowhead, since they're
+  inferred rather than observed) between lanes.
 
-Implemented since: reading a repository's origin branches (`git.go`'s `readBranches`, from
-`refs/remotes/origin/*` — not local branches, see "Decisions made") and merge-into-where edges
-via first-parent walks (`readMergeEdges`), surfaced through `WorkspaceService.GetBranches` and
-shown as plain lists in `RepoPanel` — not a lane view.
-
-Not implemented — fork-parent inference ("cut from which branch"), squash/rebase-merge
-detection, and the lane renderer itself. Everything this document says about lanes and the fork
-edges specifically is still *intent*: do not assume a file exists because this document mentions
-it.
+Not implemented — squash/rebase-merge detection, backfilling a merge edge's `From` when the
+source branch has been deleted from origin, an active/deleted-branch visibility toggle (blocked
+on that same backfill — there's currently no way to know a branch used to exist), and lane
+virtualization (the scrollable container has no windowing yet; fine at the branch counts tested
+so far, worth revisiting if a very large repo turns out to lag).
 
 Template leftovers still to deal with (cosmetic, so do not churn them in unrelated PRs):
 
@@ -79,9 +90,11 @@ Template leftovers still to deal with (cosmetic, so do not churn them in unrelat
 
 ```
 main.go                     app + window setup, service registration, embeds frontend/dist
-workspaceservice.go         the only Wails service: folder picker + repository shelf
-store.go                    Repo/Workspace model, repo discovery, JSON persistence
-store_test.go               tests for the above
+workspaceservice.go         the only Wails service: folder picker + repository shelf + branches
+store.go                    Repo/Workspace model (incl. LaneOrder), repo discovery, persistence
+git.go                      shells out to git: branches, merge edges, fork-parent inference
+lanes.go                    reconcileLaneOrder — saved lane order + live branches -> render order
+*_test.go                   tests for the above
 Taskfile.yml                top-level tasks; dispatches to build/<goos>/Taskfile.yml
 build/                      per-platform build assets + config.yml — generated, see below
 frontend/
@@ -91,7 +104,15 @@ frontend/
   src/index.css             Tailwind v4 entry + design tokens (oklch, light + .dark)
   src/hooks/use-workspace.ts    all frontend state and every service call
   src/components/repo-tabs.tsx      tab strip, plus button, keyboard navigation
-  src/components/repo-panel.tsx     selected repository (placeholder for the lane view)
+  src/components/repo-panel.tsx     selected repository: header + the branch tree
+  src/components/branch-tree/       the lane view — see its own files for the geometry model:
+    branch-tree.tsx           composes the scroll container, DndContext, ruler, gutter, plot
+    lane-row.tsx               one draggable HTML row in the label gutter
+    lane-bars.tsx               SVG: one line per branch, spanning its known timestamps
+    merge-connectors.tsx        SVG: solid curves + arrowhead between merge lanes
+    fork-connectors.tsx         SVG: dashed curves + hollow arrowhead for inferred fork edges
+    time-ruler.tsx              sticky calendar-time axis header
+    time-scale.ts / geometry.ts   the shared coordinate math the above all read from
   src/components/empty-workspace.tsx / notice-bar.tsx
   src/components/ui/        shadcn components (button.tsx only so far)
   src/lib/utils.ts          cn() helper
@@ -205,9 +226,14 @@ These are the hard parts of the problem, recorded so they don't get rediscovered
   Options, roughly in order of reliability: (a) the merge commit message conventions left by
   hosting platforms, (b) `git merge-base A B` across candidate branches, picking the candidate
   whose merge-base is nearest the branch's first unique commit, (c) `git reflog` / `merge-base
-  --fork-point`, which is accurate locally but is empty in a fresh clone and expires.
-  Whichever is chosen, the UI must be able to say "inferred" and let the user correct it —
-  silently guessing wrong about a fork parent is the worst failure mode this app has.
+  --fork-point`, which is accurate locally but is empty in a fresh clone and expires. Option (b)
+  is what's implemented (`inferForkEdges` in `git.go`): pairwise `merge-base` against every other
+  branch, picking whichever candidate's merge-base is furthest downstream on the branch's own
+  ancestry — see that function's doc comment for the direction-of-parenthood subtlety this
+  requires. The UI marks these edges visually as inferred (dashed, hollow arrowhead, a tooltip
+  saying "(inferred)") but there's still no way for a user to *correct* a wrong guess — that's
+  outstanding, and matters because silently guessing wrong about a fork parent is the worst
+  failure mode this app has.
 - **Squash-merged and rebase-merged branches leave no merge commit.** A squash-merged feature
   branch looks unmerged by topology alone. Detect via patch-id equivalence
   (`git cherry`/`--cherry-mark`) or platform conventions, and mark such edges as inferred.
@@ -221,6 +247,19 @@ These are the hard parts of the problem, recorded so they don't get rediscovered
 
 ## Decisions made
 
+- **Rendering:** hand-rolled SVG (`frontend/src/components/branch-tree/`), not a graph-layout
+  library (react-flow/dagre/cytoscape fight the fixed-one-lane-per-branch constraint, since they
+  assume free layout) and not canvas (SVG's crisp hit-testing and `<title>` tooltips won out over
+  canvas's raw speed at the branch counts tested). One shared `<svg>` holds every lane's bar and
+  every connector in a single `laneY(index)` coordinate space, inside the same native-scrolling
+  container as the HTML label gutter — a connector between two far-apart lanes, one of them
+  off-screen, is correct by construction with no manual scroll-sync code.
+- **Lane ordering:** manual only for now (drag a row's grip handle, via `@dnd-kit`), persisted
+  per repository as `Repo.LaneOrder` (`store.go`) through `WorkspaceService.SetLaneOrder`. A
+  branch with no saved position sorts after the ones that have one, default branch first, then by
+  `CommitterDate` descending (`reconcileLaneOrder` in `lanes.go`) — a stand-in for fork-parent
+  grouping as the *default* order, since automatically grouping children next to their inferred
+  parent hasn't been built.
 - **Repo selection:** native folder picker (`app.Dialog.OpenFile().CanChooseDirectories(true)`),
   reached from the tab strip's plus button. Repositories persist as tabs, so the picker is only
   ever used to add a new one.
@@ -253,20 +292,26 @@ These are the hard parts of the problem, recorded so they don't get rediscovered
 
 Not yet settled. Pick deliberately and record the choice here.
 
-- **Rendering:** SVG (crisp, easy hit-testing, DOM cost at scale) vs. canvas (fast, manual
-  hit-testing). Lane virtualization may make SVG viable.
 - Whether tags and worktrees appear in the view at all (remote branches: settled, see "Decisions
   made" — they're the only branches shown).
+- Lane virtualization: not yet needed at the branch counts tested, but the geometry model (one
+  shared SVG, absolute `laneY(index)` positioning) was deliberately built so that windowing which
+  elements mount later doesn't require changing the coordinate system.
 
 ## Where to pick up
 
-The shelf is done; the product is not. In rough order:
+The shelf and the lane view both work; refinement and the remaining heuristics are what's left.
+In rough order:
 
 1. ~~Read a repository's branch list into a Go model and surface it in `RepoPanel` as a plain
    list.~~ Done: `git.go`'s `readBranches`/`readMergeEdges`, `WorkspaceService.GetBranches`.
-2. Fork-parent inference (a heuristic — see the domain notes) and squash/rebase-merge detection,
-   plus backfilling a merge edge's `From` when the source branch has been deleted.
-3. Lane ordering, then the renderer, then vertical navigation over lanes.
+2. ~~Fork-parent inference, lane ordering, and the renderer.~~ Done: `inferForkEdges`, lane
+   ordering (`lanes.go`, `Repo.LaneOrder`), `frontend/src/components/branch-tree/`.
+3. Squash/rebase-merge detection, and backfilling a merge edge's `From` when the source branch
+   has been deleted — the latter also blocks a real active/deleted-branch visibility toggle, since
+   there's currently no way to know a branch used to exist at all.
+4. Vertical navigation refinements over lanes (virtualization, jump-to-branch) if a large repo
+   turns out to need them; lane hit-testing / click-to-focus interactions once commits are shown.
 
 Cheap things left undone in the current UI, none of them blocking: a refresh action, tab
 reordering by drag, renaming a repository's label, `Ctrl`/`Cmd`+`T` and `+W` shortcuts, and a

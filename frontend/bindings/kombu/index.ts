@@ -10,6 +10,7 @@ export type {
     AddRepositoryResult,
     Branch,
     BranchInfo,
+    ForkEdge,
     MergeEdge,
     Repo,
     Workspace
