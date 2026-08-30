@@ -48,10 +48,13 @@ Implemented:
   (`readMergeEdges`, with `filterInheritedMerges` dropping merges a branch only "has" because it
   descends from the default branch's history — see that function's doc comment for why that
   matters at scale).
-- Fork-parent inference (`inferForkEdges`): a heuristic — see the domain notes below — based on
-  pairwise `merge-base`, picking whichever candidate's merge-base is furthest downstream on the
-  branch's own ancestry chain. The default branch is never assigned a parent. A branch with no
-  confident candidate gets no edge, not a guess.
+- Fork-parent inference (`inferForkEdges`): a heuristic — see the domain notes below — in two
+  layers. A branch that was merged into another (an observed `MergeEdge`) is taken to have been
+  cut from that branch, with the fork point read off the merge commit's first parent. Everything
+  else falls back to pairwise `merge-base`, picking whichever candidate's merge-base is furthest
+  downstream on the branch's own ancestry chain, with a `canBeParent` check that stops a branch
+  merged back in — or a junior sibling/child — from being read as the parent. The default branch
+  is never assigned a parent. A branch with no confident candidate gets no edge, not a guess.
 - The lane renderer itself (`frontend/src/components/branch-tree/`): one fixed horizontal lane
   per branch on a shared calendar-time X axis, hand-rolled SVG (see "Decisions made" — this was
   the "Open decisions" rendering question, now settled), manually reorderable via `@dnd-kit`
@@ -226,14 +229,16 @@ These are the hard parts of the problem, recorded so they don't get rediscovered
   Options, roughly in order of reliability: (a) the merge commit message conventions left by
   hosting platforms, (b) `git merge-base A B` across candidate branches, picking the candidate
   whose merge-base is nearest the branch's first unique commit, (c) `git reflog` / `merge-base
-  --fork-point`, which is accurate locally but is empty in a fresh clone and expires. Option (b)
-  is what's implemented (`inferForkEdges` in `git.go`): pairwise `merge-base` against every other
-  branch, picking whichever candidate's merge-base is furthest downstream on the branch's own
-  ancestry — see that function's doc comment for the direction-of-parenthood subtlety this
-  requires. The UI marks these edges visually as inferred (dashed, hollow arrowhead, a tooltip
-  saying "(inferred)") but there's still no way for a user to *correct* a wrong guess — that's
-  outstanding, and matters because silently guessing wrong about a fork parent is the worst
-  failure mode this app has.
+  --fork-point`, which is accurate locally but is empty in a fresh clone and expires. What's
+  implemented (`inferForkEdges` in `git.go`) is a weaker relative of (a) plus (b): if a branch
+  was merged into another, take that as the fork parent (the merge itself is observed topology,
+  not a guess); otherwise fall back to pairwise `merge-base`, furthest-downstream wins, guarded
+  by a `canBeParent` check — see that function's doc comment for the direction-of-parenthood
+  subtleties, especially a feature branch that was merged back (its merge-base with its parent
+  is its own tip, which naively reads as the parent having been cut from *it*). The UI marks
+  these edges visually as inferred (dashed, hollow arrowhead, a tooltip saying "(inferred)") but
+  there's still no way for a user to *correct* a wrong guess — that's outstanding, and matters
+  because silently guessing wrong about a fork parent is the worst failure mode this app has.
 - **Squash-merged and rebase-merged branches leave no merge commit.** A squash-merged feature
   branch looks unmerged by topology alone. Detect via patch-id equivalence
   (`git cherry`/`--cherry-mark`) or platform conventions, and mark such edges as inferred.

@@ -241,35 +241,81 @@ type ForkEdge struct {
 }
 
 // inferForkEdges guesses, for every non-default branch, which other branch
-// it was most likely cut from. Git has no record of this, so the heuristic
-// is: compute merge-base(branch, candidate) for every other candidate
-// branch, and pick whichever candidate's merge-base is furthest downstream
-// (i.e. every other candidate's merge-base is an ancestor of it). Every
-// merge-base(X, *) lies somewhere on X's own ancestry chain, so these
-// candidates are themselves ancestor-ordered — the furthest-downstream one
-// reflects the least history walked back, i.e. the closest relationship. A
-// sibling branch or a grandparent can only tie or lose that comparison, never
-// win it (see the direction check below for why ties must be broken by
-// ancestry rather than by commit timestamp, which can collide). The default
-// branch is never assigned a parent: it's treated as the tree's root
-// regardless of what its own git history looks like.
+// it was most likely cut from. Git has no record of this, so it is a
+// heuristic in two layers, strongest signal first.
 //
-// One direction check matters: if merge-base(X, Y) equals X's own tip, X is
-// (weakly) an ancestor of Y — X hasn't moved since, or Y already contains
-// all of X — so Y cannot be X's parent (if anything, the relationship runs
-// the other way, and will surface when Y is the branch being resolved).
-// Without this check, a branch's own untouched-since-creation state would
-// make its *children* look like better "parents" than its true parent,
-// since nothing can have a closer common ancestor with X than a commit that
-// already contains X entirely.
+// Layer 1 — the merge a branch left behind. If branch C was merged into
+// branch P (a MergeEdge with From=C, Into=P), the overwhelmingly common
+// workflow is that C was cut from P and later merged back — so C's parent is
+// P, and its fork point is merge-base(the merge commit's first parent, C's
+// tip): the first parent is P's state at merge time, so a P that has since
+// moved on does not drag the fork point forward. This is trusted over
+// layer 2, because an observed merge is real topology, not a guess. When C
+// merged into several branches, its earliest merge wins.
+//
+// Layer 2 — pairwise merge-base, for branches with no such merge. Compute
+// merge-base(branch, candidate) for every other candidate and pick whichever
+// candidate's merge-base is furthest downstream on the branch's own ancestry
+// chain (every merge-base(X, *) lies on X's ancestry, so the candidates are
+// ancestor-ordered and "furthest downstream" means "least history walked
+// back", i.e. the closest relationship). A candidate `other` is only allowed
+// to be branch `b`'s parent when canBeParent(other, b) holds:
+//
+//   - other was merged into b (a layer-1 fact): other joined back into b, it
+//     isn't what b grew out of. Disallowed.
+//   - merge-base(other, b) == b's tip: b is contained in other, so other is
+//     downstream of b, not its origin. Disallowed.
+//   - merge-base(other, b) == other's tip: other is a clean, unmoved
+//     ancestor of b — the textbook parent. Allowed.
+//   - otherwise both have advanced past the shared point: it's a
+//     parent/child or a sibling pair, symmetric under merge-base alone.
+//     Break it toward the branch that has received merges (an integration
+//     branch outranks a leaf), then the more recently active tip, then name
+//     order — a total order, so exactly one direction of the pair is
+//     allowed and the result is stable without iterating.
+//
+// The default branch is never assigned a parent: it is the tree's root
+// regardless of what its own history looks like.
 //
 // Cost is O(n^2) git calls for n branches (merge-base memoized, since it's
 // symmetric) — fine for the small-to-medium branch counts this has been
-// tested against, but worth revisiting per AGENTS.md's scale notes if it
-// proves slow on a repository with hundreds of branches.
-func inferForkEdges(repoPath string, branches []Branch) ([]ForkEdge, error) {
+// tested against, but worth revisiting per AGENTS.md's scale notes on a
+// repository with hundreds of branches.
+func inferForkEdges(repoPath string, branches []Branch, merges []MergeEdge) ([]ForkEdge, error) {
 	if len(branches) < 2 {
 		return nil, nil
+	}
+
+	byName := make(map[string]Branch, len(branches))
+	for _, b := range branches {
+		byName[b.Name] = b
+	}
+
+	// mergedInto[C][P] — C was merged into P, so P is downstream-joined from C
+	// and cannot be C's fork parent. mergeTarget[P] — P received at least one
+	// merge, a weak "this is an integration branch" hint used only to break
+	// otherwise-symmetric merge-base ties. firstMerge[C] — C's earliest merge,
+	// the layer-1 fork signal.
+	type mergeRec struct {
+		into   string
+		commit string
+		when   time.Time
+	}
+	mergedInto := make(map[string]map[string]bool)
+	mergeTarget := make(map[string]bool)
+	firstMerge := make(map[string]mergeRec)
+	for _, e := range merges {
+		mergeTarget[e.Into] = true
+		if e.From == "" || e.From == e.Into {
+			continue
+		}
+		if mergedInto[e.From] == nil {
+			mergedInto[e.From] = make(map[string]bool)
+		}
+		mergedInto[e.From][e.Into] = true
+		if rec, ok := firstMerge[e.From]; !ok || e.When.Before(rec.when) {
+			firstMerge[e.From] = mergeRec{into: e.Into, commit: e.Commit, when: e.When}
+		}
 	}
 
 	type pairKey struct{ a, b string }
@@ -291,29 +337,72 @@ func inferForkEdges(repoPath string, branches []Branch) ([]ForkEdge, error) {
 		return out, true
 	}
 
-	var edges []ForkEdge
+	resolved := make(map[string]ForkEdge)
+
+	// Layer 1: a branch's own merge tells us where it was cut from.
+	for name, rec := range firstMerge {
+		b, ok := byName[name]
+		if !ok || b.IsDefault || rec.into == name {
+			continue
+		}
+		firstParent, err := runGit(repoPath, "rev-parse", rec.commit+"^1")
+		if err != nil {
+			continue
+		}
+		base, err := runGit(repoPath, "merge-base", firstParent, b.Head)
+		if err != nil {
+			continue
+		}
+		when, ok := commitDate(repoPath, base)
+		if !ok {
+			continue
+		}
+		resolved[name] = ForkEdge{Branch: name, From: rec.into, Commit: base, At: when}
+	}
+
+	// canBeParent reports whether p is an allowed fork parent for c: p sits
+	// upstream of c, not downstream (merged back in) and not junior to it in
+	// the both-advanced case. See the doc comment for the four cases.
+	canBeParent := func(p, c Branch) bool {
+		if mergedInto[p.Name][c.Name] {
+			return false
+		}
+		base, ok := mergeBase(p.Name, c.Name)
+		if !ok || base == c.Head {
+			return false
+		}
+		if base == p.Head {
+			return true
+		}
+		return forkParentPreferred(p, c, mergeTarget)
+	}
+
+	// Layer 2: pairwise merge-base for everything layer 1 didn't settle.
 	for _, b := range branches {
 		if b.IsDefault {
 			continue
 		}
+		if _, done := resolved[b.Name]; done {
+			continue // owned by layer 1
+		}
 
-		var bestFrom, bestCommit string
+		var best Branch
+		var bestCommit string
 		found := false
 		for _, other := range branches {
-			if other.Name == b.Name {
+			if other.Name == b.Name || !canBeParent(other, b) {
 				continue
 			}
-			base, ok := mergeBase(b.Name, other.Name)
-			if !ok || base == b.Head {
-				continue
-			}
+			base, _ := mergeBase(b.Name, other.Name)
 			switch {
 			case !found:
-				bestFrom, bestCommit, found = other.Name, base, true
+				best, bestCommit, found = other, base, true
 			case base != bestCommit && commitIsAncestor(repoPath, bestCommit, base):
 				// base is strictly downstream of the current best — a
 				// closer relationship, so other supersedes it.
-				bestFrom, bestCommit = other.Name, base
+				best, bestCommit = other, base
+			case base == bestCommit && forkParentPreferred(other, best, mergeTarget):
+				best = other
 			}
 		}
 		if !found {
@@ -323,9 +412,33 @@ func inferForkEdges(repoPath string, branches []Branch) ([]ForkEdge, error) {
 		if !ok {
 			continue
 		}
-		edges = append(edges, ForkEdge{Branch: b.Name, From: bestFrom, Commit: bestCommit, At: when})
+		resolved[b.Name] = ForkEdge{Branch: b.Name, From: best.Name, Commit: bestCommit, At: when}
+	}
+
+	var edges []ForkEdge
+	for _, b := range branches {
+		if e, ok := resolved[b.Name]; ok {
+			edges = append(edges, e)
+		}
 	}
 	return edges, nil
+}
+
+// forkParentPreferred reports whether a outranks b as the more parent-like of
+// the two when a merge-base alone can't order them — the both-advanced case,
+// where a parent that has moved past the fork point and a child (or a sibling)
+// look identical. It's a total order: a branch that has received merges
+// (likelier an integration branch than a leaf) outranks one that hasn't, then
+// the more recently active tip wins, then name order — so exactly one
+// direction of any pair is preferred and the result needs no iteration.
+func forkParentPreferred(a, b Branch, mergeTarget map[string]bool) bool {
+	if mergeTarget[a.Name] != mergeTarget[b.Name] {
+		return mergeTarget[a.Name]
+	}
+	if !a.CommitterDate.Equal(b.CommitterDate) {
+		return a.CommitterDate.After(b.CommitterDate)
+	}
+	return a.Name < b.Name
 }
 
 // commitIsAncestor reports whether commit a is an ancestor of (or equal to)

@@ -152,7 +152,7 @@ func (s *WorkspaceService) GetBranches(id string) (BranchInfo, error) {
 	if err != nil {
 		return BranchInfo{}, err
 	}
-	forks, err := inferForkEdges(repo.Path, branches)
+	forks, err := inferForkEdges(repo.Path, branches, merges)
 	if err != nil {
 		return BranchInfo{}, err
 	}

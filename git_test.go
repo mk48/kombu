@@ -230,7 +230,7 @@ func TestInferForkEdgesSimpleFork(t *testing.T) {
 		t.Fatalf("readBranches: %v", err)
 	}
 
-	edges, err := inferForkEdges(clone, branches)
+	edges, err := inferForkEdges(clone, branches, nil)
 	if err != nil {
 		t.Fatalf("inferForkEdges: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestInferForkEdgesPrefersNearestParentOverGrandparent(t *testing.T) {
 		t.Fatalf("readBranches: %v", err)
 	}
 
-	edges, err := inferForkEdges(clone, branches)
+	edges, err := inferForkEdges(clone, branches, nil)
 	if err != nil {
 		t.Fatalf("inferForkEdges: %v", err)
 	}
@@ -301,12 +301,76 @@ func TestInferForkEdgesUnrelatedHistoryYieldsNoEdge(t *testing.T) {
 		t.Fatalf("readBranches: %v", err)
 	}
 
-	edges, err := inferForkEdges(clone, branches)
+	edges, err := inferForkEdges(clone, branches, nil)
 	if err != nil {
 		t.Fatalf("inferForkEdges: %v", err)
 	}
 	if _, ok := forkEdgeFor(edges, "unrelated"); ok {
 		t.Error("a branch with no shared history got a fork edge; should have none, not a guess")
+	}
+}
+
+// TestInferForkEdgesFeatureBranchMergedBack reproduces the topology of the
+// kombu-branch-test fixture: dev is cut from main, feature1 and feature2 are
+// both cut from a commit on dev, and feature1 is then merged back into dev.
+// The merged-back feature branch used to poison the inference — its
+// merge-base with dev is its own tip, which read as "dev was cut from
+// feature1", which in turn pushed feature1 onto a sibling. All three edges
+// must now point the right way.
+func TestInferForkEdgesFeatureBranchMergedBack(t *testing.T) {
+	clone := newOriginFixture(t)
+	commit(t, clone, "init")
+	mustGit(t, clone, "push", "-q", "origin", "HEAD:main")
+
+	mustGit(t, clone, "checkout", "-q", "-b", "dev")
+	commit(t, clone, "dev branch")
+	forkPoint := commit(t, clone, "change")
+	mustGit(t, clone, "push", "-q", "origin", "dev")
+
+	mustGit(t, clone, "checkout", "-q", "-b", "feature1")
+	commit(t, clone, "feature1")
+	mustGit(t, clone, "push", "-q", "origin", "feature1")
+
+	mustGit(t, clone, "checkout", "-q", "-b", "feature2", "dev")
+	commit(t, clone, "f2")
+	mustGit(t, clone, "push", "-q", "origin", "feature2")
+
+	mustGit(t, clone, "checkout", "-q", "dev")
+	mustGit(t, clone, "merge", "-q", "--no-ff", "-m", "Merge pull request #1 from mk48/feature1", "feature1")
+	mustGit(t, clone, "push", "-q", "origin", "dev")
+
+	mustGit(t, clone, "checkout", "-q", "main")
+	mustGit(t, clone, "remote", "set-head", "origin", "-a")
+
+	branches, err := readBranches(clone)
+	if err != nil {
+		t.Fatalf("readBranches: %v", err)
+	}
+	merges, err := readMergeEdges(clone, branches)
+	if err != nil {
+		t.Fatalf("readMergeEdges: %v", err)
+	}
+	edges, err := inferForkEdges(clone, branches, merges)
+	if err != nil {
+		t.Fatalf("inferForkEdges: %v", err)
+	}
+
+	for _, tc := range []struct{ branch, from, at string }{
+		{"dev", "main", ""},
+		{"feature1", "dev", forkPoint},
+		{"feature2", "dev", forkPoint},
+	} {
+		e, ok := forkEdgeFor(edges, tc.branch)
+		if !ok {
+			t.Errorf("no fork edge for %s", tc.branch)
+			continue
+		}
+		if e.From != tc.from {
+			t.Errorf("%s.From = %q, want %q", tc.branch, e.From, tc.from)
+		}
+		if tc.at != "" && e.Commit != tc.at {
+			t.Errorf("%s.Commit = %s, want %s (the 'change' commit)", tc.branch, e.Commit, tc.at)
+		}
 	}
 }
 
